@@ -1,0 +1,146 @@
+#!/usr/bin/python3 -I
+"""builddeps: compute the build-dependency closure of a set of source packages.
+
+    tools/builddeps SOURCES-FILE OUTDIR [NAME]
+
+SOURCES-FILE has "source version" lines (e.g. tiers/T1.rebuild). Resolves build
+dependencies the way the Aqours build environment does (design decision 11):
+Debian trixie with Devuan excalibur layered over it, excalibur pinned higher.
+Uses apt's own resolver (`apt-get build-dep -s` into an empty system, private
+apt configuration, signatures checked against the pinned keyrings).
+
+Iterates to a fixpoint: every source whose architecture-dependent binaries are
+needed to build a source in the set joins the set, and its build dependencies
+are resolved in turn. Architecture: all binaries are imported, not rebuilt
+(decision 1), so they don't pull their sources in.
+
+Writes OUTDIR/NAME.rebuild (sources added beyond SOURCES-FILE, "source version
+origin"), OUTDIR/NAME.import (Architecture: all binaries needed), and
+OUTDIR/NAME.unresolved (sources whose build dependencies apt couldn't resolve).
+NAME defaults to T2.
+
+Needs AQOURS_MIRROR, AQOURS_DEBIAN_MIRROR, AQOURS_DEBIAN_SECURITY_MIRROR and
+AQOURS_KEYRINGS.
+"""
+import os, re, subprocess, sys, tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def die(msg):
+    print("builddeps: " + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def read_stanzas(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        st, last = {}, None
+        for line in f:
+            if line == "\n":
+                if st:
+                    yield st
+                st, last = {}, None
+            elif line[0] in " \t":
+                if last:
+                    st[last] += "\n" + line.rstrip("\n")
+            else:
+                k, _, v = line.partition(":")
+                last = k; st[k] = v.strip()
+        if st:
+            yield st
+
+
+def main():
+    if len(sys.argv) not in (3, 4):
+        die("usage: builddeps SOURCES-FILE OUTDIR [NAME]")
+    srcfile, outdir = sys.argv[1], sys.argv[2]
+    name = sys.argv[3] if len(sys.argv) == 4 else "T2"
+    env_get = lambda k: os.environ.get(k) or die(f"set {k}")
+    mirror, deb, debsec = env_get("AQOURS_MIRROR"), env_get("AQOURS_DEBIAN_MIRROR"), env_get("AQOURS_DEBIAN_SECURITY_MIRROR")
+    keyrings = env_get("AQOURS_KEYRINGS")
+    dkr, ukr = os.path.join(keyrings, "devuan-archive-keyring.gpg"), os.path.join(keyrings, "debian-archive-keyring.gpg")
+    os.makedirs(outdir, exist_ok=True)
+    start = {}
+    for line in open(srcfile):
+        p = line.split()
+        if len(p) >= 2:
+            start[p[0]] = p[1]
+
+    with tempfile.TemporaryDirectory(prefix="aqours-bd.", dir=os.environ.get("AQOURS_SCRATCH")) as root:
+        for d in ("etc/apt/apt.conf.d", "etc/apt/preferences.d", "etc/apt/sources.list.d",
+                  "var/lib/apt/lists/partial", "var/cache/apt/archives/partial", "var/lib/dpkg"):
+            os.makedirs(os.path.join(root, d), exist_ok=True)
+        open(os.path.join(root, "var/lib/dpkg/status"), "w").close()
+        with open(os.path.join(root, "etc/apt/sources.list"), "w") as f:
+            for s in ("excalibur", "excalibur-updates", "excalibur-security"):
+                f.write(f"deb [arch=amd64 signed-by={dkr}] {mirror} {s} main\n")
+                f.write(f"deb-src [signed-by={dkr}] {mirror} {s} main\n")
+            for s in ("trixie", "trixie-updates"):
+                f.write(f"deb [arch=amd64 signed-by={ukr}] {deb} {s} main\n")
+                f.write(f"deb-src [signed-by={ukr}] {deb} {s} main\n")
+            f.write(f"deb [arch=amd64 signed-by={ukr}] {debsec} trixie-security main\n")
+            f.write(f"deb-src [signed-by={ukr}] {debsec} trixie-security main\n")
+        with open(os.path.join(root, "etc/apt/preferences.d/aqours-overlay"), "w") as f:
+            f.write("Package: *\nPin: release o=Devuan\nPin-Priority: 600\n\n"
+                    "Package: *\nPin: release o=Debian\nPin-Priority: 500\n")
+        conf = os.path.join(root, "apt.conf")
+        with open(conf, "w") as f:
+            f.write(f'Dir "{root}/";\nDir::State::status "{root}/var/lib/dpkg/status";\n'
+                    'APT::Architecture "amd64";\nAPT::Architectures { "amd64"; };\n'
+                    'Acquire::Languages "none";\nDebug::NoLocking "true";\n')
+        env = dict(os.environ, APT_CONFIG=conf)
+        r = subprocess.run(["apt-get", "update", "-q", "--error-on=any"], env=env, capture_output=True, text=True)
+        if r.returncode:
+            die("apt-get update failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+
+        # (binary, version) -> (source, source version, arch, origin)
+        lists = os.path.join(root, "var/lib/apt/lists")
+        bins = {}
+        for fn in sorted(os.listdir(lists)):
+            if not fn.endswith("_Packages"):
+                continue
+            origin = "devuan" if "devuan" in fn else "debian"
+            for st in read_stanzas(os.path.join(lists, fn)):
+                n, v = st["Package"], st["Version"]
+                m = re.match(r"^(\S+)(?:\s+\((.+)\))?$", st.get("Source", n))
+                bins[(n, v)] = (m.group(1), m.group(2) or v, st.get("Architecture", ""), origin)
+
+        have = dict(start)          # sources in the set
+        added = {}                  # source -> (version, origin) beyond the start set
+        imports, unresolved = set(), {}
+        todo = sorted(start)
+        rounds = 0
+        while todo:
+            rounds += 1
+            nxt = []
+            for src in todo:
+                r = subprocess.run(["apt-get", "build-dep", "-s", "-q", "--arch-only", src],
+                                   env=env, capture_output=True, text=True)
+                if r.returncode:
+                    unresolved[src] = (r.stdout + r.stderr).strip().splitlines()[-1][:200] if (r.stdout + r.stderr).strip() else "?"
+                    continue
+                for n, v in re.findall(r"^Inst (\S+) \((\S+)", r.stdout, re.M):
+                    info = bins.get((n, v))
+                    if not info:
+                        continue
+                    s, sv, arch, origin = info
+                    if arch == "all":
+                        imports.add((n, v)); continue
+                    if s not in have:
+                        have[s] = sv; added[s] = (sv, origin); nxt.append(s)
+            todo = sorted(set(nxt))
+            print(f"round {rounds}: +{len(todo)} sources (total added {len(added)})", flush=True)
+
+        with open(os.path.join(outdir, name + ".rebuild"), "w") as f:
+            f.writelines(f"{s} {v} {o}\n" for s, (v, o) in sorted(added.items()))
+        with open(os.path.join(outdir, name + ".import"), "w") as f:
+            f.writelines(f"{n} {v}\n" for n, v in sorted(imports))
+        with open(os.path.join(outdir, name + ".unresolved"), "w") as f:
+            f.writelines(f"{s}: {why}\n" for s, why in sorted(unresolved.items()))
+        n_deb = sum(1 for _, o in added.values() if o == "debian")
+        print(f"{name}: {len(added)} sources added ({n_deb} only in Debian), {len(imports)} arch:all binaries, "
+              f"{len(unresolved)} sources with unresolvable build dependencies")
+
+
+if __name__ == "__main__":
+    main()
