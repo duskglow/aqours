@@ -23,6 +23,8 @@ KEYRINGS=${AQOURS_KEYRINGS:-}
 SUITE=excalibur
 EXTRA_SOURCES=""
 INCLUDE="init,sysvinit-core,eudev,kmod,e2fsprogs,linux-image-amd64,initramfs-tools,procps,iproute2"
+EXTRA_KEYRINGS=()
+CHECKS=()
 while [ $# -gt 1 ]; do
   case "$1" in
     --mirror) MIRROR=$2; shift 2;;
@@ -30,6 +32,8 @@ while [ $# -gt 1 ]; do
     --keyrings) KEYRINGS=$2; shift 2;;
     --source) EXTRA_SOURCES+="$2"$'\n'; shift 2;;   # an extra full sources line
     --include) INCLUDE+=",$2"; shift 2;;
+    --keyring-file) EXTRA_KEYRINGS+=("$2"); shift 2;;  # another archive keyring to trust (e.g. Aqours's)
+    --check) CHECKS+=("$2"); shift 2;;            # a boot check script, run by the boot-test init script
     *) echo "unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -61,6 +65,10 @@ BOOTTEST='#!/bin/sh
 # Short-Description: Aqours boot test marker
 ### END INIT INFO
 case "$1" in start)
+  for c in /etc/aqours-boottest.d/*; do
+    [ -f "$c" ] || continue
+    sh "$c" > /dev/ttyS0 2>&1 || echo "AQOURS-CHECK: $(basename "$c") FAIL (exit $?)" > /dev/ttyS0
+  done
   rl=$(runlevel | cut -d" " -f2)
   libc=$(readlink -f /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null || echo none)
   echo "AQOURS-BOOTTEST: OK $(uname -r) runlevel=$rl libc=$libc" > /dev/ttyS0
@@ -68,11 +76,22 @@ case "$1" in start)
 esac
 exit 0'
 
+# Boot checks are copied through the staging directory, which the namespace's
+# mapped root can read (it can't enter a mode-750 home directory).
+mkdir -p "$STAGE/checks"; chmod 755 "$STAGE/checks"
+for c in "${CHECKS[@]}"; do cp "$c" "$STAGE/checks/"; done
+chmod 644 "$STAGE"/checks/* 2>/dev/null || true
+keyopts=(--keyring="$KR")
+keyhooks=(--customize-hook="mkdir -p \"\$1/etc/apt/trusted.gpg.d\"" --customize-hook="copy-in $KR /etc/apt/trusted.gpg.d/")
+for k in "${EXTRA_KEYRINGS[@]}"; do
+  keyopts+=(--keyring="$k"); keyhooks+=(--customize-hook="copy-in $k /etc/apt/trusted.gpg.d/")
+done
+
 mmdebstrap --mode=unshare --variant=minbase --format=null \
-  --keyring="$KR" \
+  "${keyopts[@]}" \
   --include="$INCLUDE" \
-  --customize-hook="mkdir -p \"\$1/etc/apt/trusted.gpg.d\"" \
-  --customize-hook="copy-in $KR /etc/apt/trusted.gpg.d/" \
+  "${keyhooks[@]}" \
+  --customize-hook="mkdir -p \"\$1/etc/aqours-boottest.d\" && cp \"$STAGE\"/checks/* \"\$1/etc/aqours-boottest.d/\" 2>/dev/null; true" \
   --customize-hook="printf '%s\n' '$BOOTTEST' > \"\$1/etc/init.d/aqours-boottest\" && chmod 755 \"\$1/etc/init.d/aqours-boottest\"" \
   --customize-hook='chroot "$1" update-rc.d aqours-boottest defaults >/dev/null' \
   --customize-hook='echo "T0:23:respawn:/sbin/getty -L ttyS0 115200 vt100" >> "$1/etc/inittab"' \

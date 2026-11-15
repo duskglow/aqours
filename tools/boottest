@@ -7,7 +7,8 @@
 # is opened read-only with a throwaway overlay (snapshot=on), so it is never
 # modified.
 #
-# PASS: the console shows "AQOURS-BOOTTEST: OK" and the VM powers itself off.
+# PASS: the console shows "AQOURS-BOOTTEST: OK", no "AQOURS-CHECK: ... FAIL" line
+# from the image's boot checks (tools/mkimage --check), and the VM powers itself off.
 # FAIL, as soon as it is seen: a kernel panic, an init or fsck failure that drops
 # to a maintenance shell, a dracut/initramfs emergency shell, or the VM exiting
 # without the marker. The timeout is only a backstop against a silent hang; it
@@ -42,10 +43,14 @@ done
 wait $qpid; rc=$?
 
 marker=$(grep -a 'AQOURS-BOOTTEST: OK' "$LOG" | tail -1 | tr -d '\r')
+checks=$(grep -a -c '^AQOURS-CHECK: ' "$LOG")
+failed=$(grep -a '^AQOURS-CHECK: .* FAIL' "$LOG" | tr -d '\r')
 if [ -z "$verdict" ]; then
   if [ -z "$marker" ]; then verdict="FAIL (VM exited, qemu status $rc, without the marker)"
+  elif [ -n "$failed" ]; then verdict="FAIL ($(echo "$failed" | wc -l) of $checks boot checks failed)"
   elif [ $rc -ne 0 ]; then verdict="FAIL (marker seen, but qemu exited with $rc)"
   else verdict="PASS ($marker)"; fi
 fi
-echo "boottest: $verdict  [$((SECONDS - start))s, log $LOG]"
+echo "boottest: $verdict  [$((SECONDS - start))s, $checks boot checks, log $LOG]"
+grep -a '^AQOURS-CHECK: ' "$LOG" | tr -d '\r'
 case "$verdict" in PASS*) exit 0;; *) tail -5 "$LOG" | tr -d '\r' | cut -c1-200; exit 1;; esac
