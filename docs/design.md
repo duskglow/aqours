@@ -104,13 +104,26 @@ also covers testing Liella's reference .debs installed alongside glibc in an exc
 testing but not as the shipped design.
 
 **Stage 1: build against Liella from a glibc host.** The excalibur chroot still has glibc running the compilers, but
-compiles against Liella's headers and links against Liella's libraries. This builds the **build-essential closure**
-(tier 0) and installs it into `aqours-bootstrap`.
-- Method: reuse Liella's `liella-cc`/`liella-c++` wrappers and the `check-elf.sh` gate from the smoke harness, so the
-  build can't silently fall back to glibc.
-- Build profiles: `nocheck`, plus `stage1` where a source defines it. Tests are skipped here because the host is
+links against Liella's libraries. This builds the **build-essential closure** (tier 0) and installs it into
+`aqours-bootstrap`.
+- **Method:** reuse Liella's `liella-cc`/`liella-c++` wrappers and the `check-elf.sh` gate from the smoke harness, so
+  the build can't silently fall back to glibc.
+- **Headers:** until Liella's own headers exist, stage 1 compiles with excalibur's glibc 2.41 headers. Liella keeps
+  glibc's struct layouts and constants, so the binaries are what Liella promises to run, but three things leak through:
+  - `__GLIBC_MINOR__` reads 41, so a configure check can enable a 2.40/2.41 feature;
+  - feature-macro redirects and fortify `__*_chk` functions can bind to 2.40/2.41 symbol versions;
+  - vectorised maths can call libmvec, which Liella doesn't have.
+
+  So the gate also refuses any reference to a `GLIBC_2.40`/`GLIBC_2.41` version node or to `libmvec`, and builds
+  disable fortify-level redirects where needed.
+- **Stage 1 is a throwaway.** Nothing built with glibc's headers ships. Stages 2 and 3 rebuild everything once
+  Liella's headers exist. Issues filed from stage 1 describe behaviour (what glibc does, what Liella does) and never
+  quote glibc header text, because Liella is a clean-room implementation.
+- **Build profiles:** `nocheck`, plus `stage1` where a source defines it. Tests are skipped here because the host is
   mixed; they run in stage 2.
-- Needs from Liella: items 1–4 of section 7.
+- **Needs from Liella:** items 1–4 of section 7. Liella's planned checkpoint before stage 2 (an excalibur root with
+  Liella swapped in, a scan of every ELF's version needs, and `apt install` of a sample) overlaps with stage 1. The
+  two coordinators decide together who runs it.
 
 **Stage 2: native, glibc-free.** The chroot contains only stage-1 packages and Liella's `libc6` packages, with
 **no glibc**. Its first job is rebuilding tier 0 from source inside itself; that proves self-hosting. Then it builds
@@ -153,32 +166,28 @@ decision.
 
 ## 7. What Aqours needs from Liella
 
-In order of need. Items 1–4 gate stage 1; 5–7 gate stage 2 and first light. Today's Liella installs by path, without
-its own headers (the smoke harness compiles with the host's glibc headers). Items 2–5 are the "system-libc work" that
-Liella has planned and partly briefed.
+In order of need: items 1–4 gate stage 1, and 5–7 gate stage 2 and first light. Almost all of it is Liella's planned
+"system-libc" work: see `plan/system-libc.md` in duskglow/liella (branch `next`), and its scan of excalibur in
+`results/system-libc-scan-2026-11-14.md`. Status as of 2026-11-15:
 
-1. **Start-up soname search** (DL-START-SEARCH, in progress) and the `dlclose` fix: the snapshot.
-2. **Standard install paths, laid out as glibc's `libc6` does:** the program interpreter
-   `/lib64/ld-linux-x86-64.so.2` must resolve, because every amd64 binary names that path. In excalibur (merged-/usr)
-   the file is in `/usr/lib/x86_64-linux-gnu/`, linked from `/usr/lib64/`. Also `libc.so.6` and its companions (`libm`, `libpthread`,
-   `libdl`, `librt`, `libresolv`, `libutil`, `libanl`, `libnss_*`) in `/usr/lib/x86_64-linux-gnu/`, with sonames, the
-   way glibc's `libc6` lays them out.
-3. **Development files:** Liella's own headers, consistent with its ABI, so that compiling can't bind a
-   2.40/2.41 symbol by accident; the CRT objects (`crt1.o`, `Scrt1.o`, `crti.o`, `crtn.o`), the `libc.so` linker
-   script, `libc_nonshared.a`, and the static `libc.a` that some packages need. All packaged as `libc6-dev`.
-4. **dpkg metadata:** a `symbols` file and `shlibs` for `libc6`, so that `dpkg-shlibdeps` writes correct dependencies
-   into everything Aqours builds.
-5. **`libc-bin` tools:** `ldconfig` (dpkg triggers run it on every library install), `ldd`, `getconf`, `getent`,
-   `iconv`, `locale`, `localedef`.
-6. **Package versions** that satisfy excalibur's versioned dependencies. Sources and maintainer scripts ask for
-   `libc6 (>= 2.3x)`, and a few for `>= 2.40`. Liella's version scheme must sort sensibly against those while the ABI
-   label stays 2.39. This is to agree with Liella.
-7. **Runtime data:** gconv modules for `iconv`, locale support (at least `C.UTF-8`, plus the `locales` package path),
-   NSS `files` and `dns` with a default `nsswitch.conf`.
-8. **2.40/2.41 functions**, each as a source needs it (issues filed by Aqours as found).
+| # | Need | Liella's status |
+|---|---|---|
+| 1 | **Start-up soname search** and the `dlclose` fix (the snapshot) | In flight |
+| 2 | **Standard install paths, laid out as glibc's `libc6`**: PT_INTERP `/lib64/ld-linux-x86-64.so.2` resolves (merged-/usr, multiarch libdir); `libc.so.6`, `libm.so.6` and the companion sonames | Planned (layout ruled; work continuing). `libpthread`, `libdl`, `librt`, `libutil`, `libanl` exist as placeholders, their symbols in `libc.so.6` as in modern glibc. `libresolv`, `libBrokenLocale`: in flight. **No `libnss_*` modules:** NSS `files` and `dns` are built into libc. |
+| 3 | **Development files** as `libc6-dev`: CRT objects, `libc.so` script, `libc_nonshared.a`, static `libc.a`, **Liella's own headers** | Everything but the headers exists or is in flight. **Headers are the long pole** (large, split by spec section); stage 1 works around them (section 4). |
+| 4 | **dpkg `symbols` and `shlibs`** for `libc6`, generated from Liella's ABI tables | Planned. Each `GLIBC_2.x` symbol's minimum version is `2.x`, so a rebuilt package depends on the version node it actually uses. |
+| 5 | **`libc-bin` tools:** `ldconfig` first (dpkg triggers run it on every library install), then `getent`, `getconf`, `locale`, `iconv`, `ldd`; `localedef` later | `ldconfig` in progress; the rest planned. First light needs only `C.UTF-8`, which is built in, so `localedef` can come after. |
+| 6 | **Package versions** that sort correctly against excalibur's `libc6 (>= 2.x)` dependencies | **Settled:** `<abi>+liella<YYYYMMDD>.<n>-<rev>`, no epoch; `<abi>` stays 2.39 until GLIBC_2.41 is complete. `2.39 < 2.39+liella… < 2.40`, so every dependency up to 2.39 is met and every 2.40/2.41 one is honestly not. A hand-written `(>= 2.40)` or `(>= 2.41)` is either a real need (issue) or a conservative bump (an Aqours patch). |
+| 7 | **Runtime data** | **No gconv modules** (iconv's codecs are built in). `C`, `C.UTF-8` and `POSIX` are built in; other locales are compiled from Devuan's data by Liella's `localedef`. NSS `files` and `dns` are built in; `nsswitch.conf` and `gai.conf` ship with `libc-bin`. Aqours's default `nsswitch.conf` uses `files`, not `compat`. |
+| 8 | **2.40/2.41 functions** | One issue per need. Liella's scan found no excalibur package needing 2.40 and 37 needing 2.41. |
 
-This list was sent to the Liella coordinator on 2026-11-15, with three questions: which items are already planned,
-in what order, and how to agree on item 6.
+**What follows for Aqours:**
+- **Packages that can't work with Liella are dropped.** These are the ones that use `GLIBC_PRIVATE` (libnss-db,
+  unscd, wcc, zzuf); Liella exports none. `nscd`/`unscd` are dropped anyway: Liella has its own name-service cache.
+- **The `compat` NSS service and external NSS modules (LDAP, mDNS) come later**, so Snow Halation uses `files` and
+  `dns` only.
+- **`tzdata` needs `zic` only when rebuilt.** It's `Architecture: all`, so Aqours imports it (decision 1) and doesn't
+  wait for Liella's `zic`.
 
 ## 8. Storage and housekeeping
 
