@@ -21,18 +21,27 @@ case "$SRC" in
   gcc-1[0-9]|glibc|llvm-toolchain-*|rustc|rust-*|linux|firefox-esr|thunderbird|libreoffice|openjdk-*|qtwebengine-*|chromium|webkit2gtk|mesa|python3.1[0-9]|binutils|systemd|perl)
     export AQOURS_SCRATCH=${AQOURS_SCRATCH_DISK:-$AQOURS_SCRATCH};;
 esac
-case "$SRC" in rust-*|rustc|llvm-toolchain-*|gcc-1[0-9]|glibc|linux|libreoffice|firefox-esr|chromium) SIZE=L;; *) SIZE=M;; esac
+# The slots reservation. Most builds spend long stretches single-threaded
+# (configure, tests, packaging), so ordinary sources reserve a small share and
+# the queue packs more of them per host; only the giants reserve a lot.
+case "$SRC" in
+  rust-*|rustc|llvm-toolchain-*|gcc-1[0-9]|glibc|linux|libreoffice|firefox-esr|chromium) SIZE=L;;
+  binutils|systemd|perl|python3.1[0-9]|openssl|util-linux|gnutls28|krb5|bind9|vim|grub2|elfutils|gnupg2|apparmor|exim4|openssh) SIZE=M;;
+  *) SIZE=S;;
+esac
 
 work="$HOME/aqours/out/$STAGE/${SRC}_${VER}"
 logdir="$AQOURS_LOGS/$STAGE"
 rm -rf "$work"; mkdir -p "$work" "$logdir"
+rm -f "$logdir/${SRC}_${VER}.result"
 cd "$work" || exit 1
 
 case "$STAGE" in
   stage0) opts=(--no-arch-all --arch-any); dbo="noautodbgsym";;
   *) echo "RESULT error 0 - unknown-stage"; exit 2;;
 esac
-jobs=${AQOURS_JOBS:-8}; [ "$SIZE" = L ] && jobs=$((jobs * 2))
+jobs=${AQOURS_JOBS:-8}
+case "$SIZE" in S) jobs=$(( (jobs + 1) / 2 ));; L) jobs=$((jobs * 2));; esac
 export DEB_BUILD_OPTIONS="parallel=$jobs $dbo"
 
 start=$SECONDS
@@ -56,4 +65,7 @@ elif [ -n "$log" ]; then res=fail
 else res=error; fi
 
 cd /; rm -rf "$work"
-echo "RESULT $res $secs ${failstage:--} $dest"
+line="RESULT $res $secs ${failstage:--} $dest"
+# Also leave the result beside the log, so a restarted driver can pick it up.
+echo "$line" > "$logdir/${SRC}_${VER}.result.tmp" && mv -f "$logdir/${SRC}_${VER}.result.tmp" "$logdir/${SRC}_${VER}.result"
+echo "$line"

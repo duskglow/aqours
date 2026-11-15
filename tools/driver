@@ -20,6 +20,9 @@ Operating rules (learned by Liella, adopted by Aqours):
   - Large sources are dispatched first so they don't straggle at the end.
   - Notable events (stage done, systemic stop, host trouble) are appended to the
     events file, one line per condition.
+  - Restartable: a new driver adopts builds an earlier one left running (each
+    build leaves a .result file beside its log). Creating STOP or STOP-<stage>
+    next to the database pauses dispatch; running builds finish.
 """
 import json, os, re, sqlite3, subprocess, sys, threading, time
 
@@ -80,11 +83,73 @@ def signature(failstage, logpath, host):
     return f"{failstage}: {out}" if out else (failstage or "unknown")
 
 
+RESULT_RE = re.compile(r"^RESULT (\S+) (\d+) (\S+) (\S+)$", re.M)
+
+
+def record(c, con, stage, h, src, ver, text, stop):
+    """Record a RESULT line for a job; returns the failure signature (None if ok)."""
+    m = RESULT_RE.search(text or "")
+    if m:
+        res, secs, fstage, log = m.group(1), int(m.group(2)), m.group(3), m.group(4)
+    else:
+        res, secs, fstage, log = "error", 0, "-", "-"
+    sig = None if res == "ok" else signature(fstage, log, c["hosts"][h]["ssh"])
+    con.execute("update jobs set status=?, host=?, finished=?, secs=?, failstage=?, signature=?, log=? "
+                "where stage=? and source=? and version=?",
+                (res, h, time.time(), secs, fstage, sig, log, stage, src, ver))
+    print(f"{time.strftime('%H:%M:%S')} {h:6} {res:5} {secs:6}s {src} {ver}" + (f"  [{sig}]" if sig else ""),
+          flush=True)
+    if sig:
+        n = con.execute("select count(distinct source) from jobs where stage=? and signature=?",
+                        (stage, sig)).fetchone()[0]
+        if n >= SYSTEMIC and not stop.is_set():
+            stop.set()
+            event(c, f"systemic-stop {stage}: signature hit {n} sources: {sig}")
+    return sig
+
+
+def stop_requested(stage):
+    d = os.path.dirname(conf()["db"])
+    return os.path.exists(os.path.join(d, "STOP")) or os.path.exists(os.path.join(d, "STOP-" + stage))
+
+
 def run(stage):
     c = conf(); hosts = c["hosts"]
     lock = threading.Lock()
     stop = threading.Event()
     outstanding = {h: 0 for h in hosts}
+    logs = c.get("logs", "")
+
+    def adopt(h, src, ver):
+        """Wait for a build started by an earlier driver: poll its result file on the host."""
+        ssh = hosts[h]["ssh"]; con = db(c)
+        rfile = f"{logs}/{stage}/{src}_{ver}.result"
+        try:
+            while True:
+                p = subprocess.run(["ssh", "-o", "BatchMode=yes", ssh,
+                                    f"cat {rfile} 2>/dev/null || (pgrep -f 'buildone {stage} {src} {ver}' >/dev/null "
+                                    f"&& echo RUNNING || echo GONE)"], capture_output=True, text=True)
+                out = p.stdout.strip()
+                if out.startswith("RESULT"):
+                    record(c, con, stage, h, src, ver, out, stop); return
+                if out == "GONE":
+                    con.execute("update jobs set status='queued', host=null, started=null where stage=? and source=? "
+                                "and version=?", (stage, src, ver))
+                    event(c, f"lost-build {stage}: {src} {ver} on {h} ended without a result; requeued")
+                    return
+                time.sleep(60)
+        finally:
+            with lock:
+                outstanding[h] -= 1
+
+    # Adopt builds an earlier driver left running.
+    threads = []
+    for src, ver, h in db(c).execute("select source, version, host from jobs where stage=? and status='running'",
+                                     (stage,)).fetchall():
+        if h in hosts and logs:
+            outstanding[h] += 1
+            t = threading.Thread(target=adopt, args=(h, src, ver), daemon=True); t.start(); threads.append(t)
+            print(f"adopting {src} {ver} on {h}", flush=True)
 
     def next_job():
         con = db(c)
@@ -105,31 +170,18 @@ def run(stage):
             p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=60", ssh,
                                 f"~/aqours/tools/buildone {stage} {src} {ver}"],
                                capture_output=True, text=True)
-            m = re.search(r"^RESULT (\S+) (\d+) (\S+) (\S+)$", p.stdout, re.M)
-            if m:
-                res, secs, fstage, log = m.group(1), int(m.group(2)), m.group(3), m.group(4)
-            else:
-                res, secs, fstage, log = "error", 0, "-", "-"
+            if not RESULT_RE.search(p.stdout):
                 event(c, f"host-trouble {h}: buildone gave no result for {src} {ver} (ssh exit {p.returncode}): "
                          + (p.stderr.strip().splitlines() or ["-"])[-1][:200])
-            sig = None if res == "ok" else signature(fstage, log, ssh)
-            con.execute("update jobs set status=?, finished=?, secs=?, failstage=?, signature=?, log=? "
-                        "where stage=? and source=? and version=?",
-                        (res, time.time(), secs, fstage, sig, log, stage, src, ver))
-            print(f"{time.strftime('%H:%M:%S')} {h:6} {res:5} {secs:6}s {src} {ver}" + (f"  [{sig}]" if sig else ""),
-                  flush=True)
-            if sig:
-                n = con.execute("select count(distinct source) from jobs where stage=? and signature=?",
-                                (stage, sig)).fetchone()[0]
-                if n >= SYSTEMIC and not stop.is_set():
-                    stop.set()
-                    event(c, f"systemic-stop {stage}: signature hit {n} sources: {sig}")
+            record(c, con, stage, h, src, ver, p.stdout, stop)
         finally:
             with lock:
                 outstanding[h] -= 1
 
-    threads = []
     while not stop.is_set():
+        if stop_requested(stage):
+            event(c, f"stop-requested {stage}: dispatch paused; running builds will finish")
+            stop.set(); break
         launched = False
         with lock:
             for h in hosts:
