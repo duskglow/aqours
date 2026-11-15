@@ -17,7 +17,8 @@ once, verified against the signed index, cached in OUTDIR/elf-cache.tsv) are
 imported, not rebuilt, so they don't pull their sources in.
 
 Writes OUTDIR/NAME.rebuild (sources added beyond SOURCES-FILE, "source version
-origin"), OUTDIR/NAME.import (Architecture: all binaries needed), and
+origin"), OUTDIR/NAME.import (binaries imported, not rebuilt), OUTDIR/NAME.why
+(for each added source, the chain of build dependencies that pulled it in), and
 OUTDIR/NAME.unresolved (sources whose build dependencies apt couldn't resolve).
 NAME defaults to T2.
 
@@ -163,9 +164,13 @@ def main():
             except OSError:
                 return []
 
+        # AQOURS_GLOBAL_PROFILES (e.g. "nocheck,nodoc") applies build profiles to every
+        # source, to measure a minimal bootstrap closure.
+        global_profiles = [p for p in os.environ.get("AQOURS_GLOBAL_PROFILES", "").split(",") if p]
+
         def resolve(src):
             cmd = ["apt-get", "build-dep", "-s", "-q", "--arch-only"]
-            profiles = declared(src, "build-profiles")
+            profiles = sorted(set(declared(src, "build-profiles")) | set(global_profiles))
             if profiles:
                 cmd += ["-P", ",".join(profiles)]
             r = subprocess.run(cmd + [src], env=env, capture_output=True, text=True)
@@ -175,6 +180,7 @@ def main():
         added = {}                  # source -> (version, origin) beyond the start set
         imports, unresolved = set(), {}
         noelf = set()               # architecture-dependent binaries imported under decision 13
+        why = {}                    # source -> (the source whose build first needed it, via which binary)
         todo = sorted(start)
         rounds = 0
         jobs = int(os.environ.get("AQOURS_BUILDDEPS_JOBS", "8"))
@@ -202,6 +208,7 @@ def main():
                         s, sv, _, origin = bins[(n, v)][:4]
                         if s not in have:
                             have[s] = sv; added[s] = (sv, origin); nxt.append(s)
+                            why[s] = (src, n)   # first pulled in by building src, through binary n
                 todo = sorted(set(nxt))
                 print(f"round {rounds}: +{len(todo)} sources (total added {len(added)}, "
                       f"{len(noelf)} ELF-free binaries imported)", flush=True)
@@ -210,6 +217,15 @@ def main():
             f.writelines(f"{s} {v} {o}\n" for s, (v, o) in sorted(added.items()))
         with open(os.path.join(outdir, name + ".import"), "w") as f:
             f.writelines(f"{n} {v}\n" for n, v in sorted(imports))
+        with open(os.path.join(outdir, name + ".why"), "w") as f:
+            # one line per added source: the chain back to a source of the input set
+            for s in sorted(added):
+                chain, cur = [], s
+                while cur in why and len(chain) < 50:
+                    parent, via = why[cur]
+                    chain.append(f"{cur} <-[{via}]- {parent}")
+                    cur = parent
+                f.write(s + ": " + " ; ".join(chain) + "\n")
         with open(os.path.join(outdir, name + ".unresolved"), "w") as f:
             f.writelines(f"{s}: {why}\n" for s, why in sorted(unresolved.items()))
         n_deb = sum(1 for _, o in added.values() if o == "debian")
