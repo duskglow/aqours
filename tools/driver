@@ -9,7 +9,11 @@
 
 Settings come from ~/aqours/driver.conf (JSON):
   {"db": ".../aqours.db", "events": ".../events.log",
-   "hosts": {"hostA": {"ssh": "user@hostA", "max": 4}, ...}}
+   "hosts": {"hostA": {"ssh": "user@hostA", "max": 4}, ...},
+   "publish": {"stage1": "bootstrap"}, "incoming": "...", "reprepro": "...", "gnupghome": "..."}
+A stage listed under "publish" has its successful builds (status ok, or oknc:
+built but its tests failed) included into that suite from the incoming
+directory, signed on this host.
 
 Operating rules (learned by Liella, adopted by Aqours):
   - No retries: a failure is a result, recorded once. Requeue by hand after a fix.
@@ -88,7 +92,7 @@ def signature(failstage, logpath, host):
     # error, a test-suite FAIL, or an sbuild E: line other than the generic
     # "Build failure". Anchored, because sbuild's preamble has lines like
     # "I: NOTICE: ..." that loose patterns match in every log.
-    pattern = r"(^dh_[a-z_]+: error:|: (fatal )?error:|^FAIL: |^E: |^make(\[[0-9]+\])?: \*\*\*)"
+    pattern = r"(^GATE FAIL |^dh_[a-z_]+: error:|: (fatal )?error:|^FAIL: |^E: |^make(\[[0-9]+\])?: \*\*\*|^ld\.so: )"
     try:
         out = subprocess.run(["ssh", "-o", "BatchMode=yes", host,
                               f"zstdcat {logpath} | grep -a -E '{pattern}' | grep -av -e 'E: Build failure' "
@@ -111,6 +115,8 @@ def record(c, con, stage, h, src, ver, text, stop):
     else:
         res, secs, fstage, log = "error", 0, "-", "-"
     sig = None if res == "ok" else signature(fstage, log, c["hosts"][h]["ssh"])
+    if res in ("ok", "oknc") and stage in c.get("publish", {}):
+        res = publish(c, stage, src, ver) or res
     con.execute("update jobs set status=?, host=?, finished=?, secs=?, failstage=?, signature=?, log=? "
                 "where stage=? and source=? and version=?",
                 (res, h, time.time(), secs, fstage, sig, log, stage, src, ver))
@@ -123,6 +129,27 @@ def record(c, con, stage, h, src, ver, text, stop):
             stop.set()
             event(c, f"systemic-stop {stage}: signature hit {n} sources: {sig}")
     return sig
+
+
+def publish(c, stage, src, ver):
+    """Include a staged build into the stage's suite (conf "publish": {stage: suite}).
+
+    Runs on this (the coordination) host, which holds the signing key. Returns
+    None on success, or "publish-failed" (and raises an event) otherwise."""
+    suite = c["publish"][stage]
+    d = os.path.join(c["incoming"], stage, f"{src}_{ver}")
+    changes = [f for f in (os.listdir(d) if os.path.isdir(d) else []) if f.endswith(".changes")]
+    if len(changes) != 1:
+        event(c, f"publish-failed {stage}: {src} {ver}: expected one .changes in {d}, found {len(changes)}")
+        return "publish-failed"
+    env = dict(os.environ, GNUPGHOME=c["gnupghome"])
+    p = subprocess.run(["reprepro", "-b", c["reprepro"], "--ignore=wrongdistribution", "include", suite,
+                        os.path.join(d, changes[0])], capture_output=True, text=True, env=env)
+    if p.returncode != 0:
+        event(c, f"publish-failed {stage}: {src} {ver} into {suite}: " + (p.stderr.strip().splitlines() or ["?"])[-1][:200])
+        return "publish-failed"
+    subprocess.run(["rm", "-rf", d])
+    return None
 
 
 def acknowledged(sig):
@@ -275,7 +302,7 @@ def resig(stage):
 def failures(stage):
     c = conf(); con = db(c)
     for row in con.execute("select source, version, status, host, failstage, signature, log from jobs "
-                           "where stage=? and status in ('fail','hang','error') order by source", (stage,)):
+                           "where stage=? and status in ('fail','hang','error','oknc','publish-failed') order by source", (stage,)):
         print(" | ".join(str(x) for x in row))
 
 

@@ -49,6 +49,11 @@ cd "$work" || exit 1
 case "$STAGE" in
   stage0)  opts=(--no-arch-all --arch-any); dbo="noautodbgsym"; patches=no;;   # pure baseline: Devuan as is
   stage0p) opts=(--no-arch-all --arch-any); dbo="noautodbgsym"; patches=yes;;  # baseline + Aqours patches (glibc)
+  # Stage 1 (decision 12): built in the chroot with Liella swapped in, tests on,
+  # Aqours patches applied; outputs gated (tools/elfgate) and staged for the
+  # "bootstrap" suite.
+  stage1)  opts=(--no-arch-all --arch-any); dbo="noautodbgsym"; patches=yes
+           export AQOURS_CHROOT=${AQOURS_CHROOT_STAGE1:?set AQOURS_CHROOT_STAGE1};;
   *) echo "RESULT error 0 - unknown-stage"; exit 2;;
 esac
 
@@ -91,8 +96,6 @@ fi
 jobs=${AQOURS_JOBS:-8}
 case "$SIZE" in S) jobs=$(( (jobs + 1) / 2 ));; L) jobs=$((jobs * 2));; esac
 export DEB_BUILD_OPTIONS="parallel=$jobs $dbo"
-
-start=$SECONDS
 # slots caps a shared job's run time (SLOT_MAX_MIN, default 150 minutes), and
 # gcc or binutils with their test suites run longer. Our own backstop below is
 # the only time limit, so lift the queue's cap just above it.
@@ -105,31 +108,75 @@ case "$SRC" in gcc-1[0-9]) backstop_h=${AQOURS_GCC_BACKSTOP_H:-24};; esac
 # (libuv's thread_affinity), so pinning makes results depend on which block a
 # job got. A no-op pin helper leaves builds unpinned; the queue still counts cores.
 export SLOT_PIN_BIN=/bin/true
-SLOT_MAX_MIN=$(( backstop_h * 60 + 15 )) SLOT_SIZE=$SIZE "$HOME/bin/slots" 1 "aqours:$STAGE:$SRC" \
-  timeout --kill-after=5m "${backstop_h}h" \
-  sbuild --chroot="$AQOURS_CHROOT" --dist=excalibur "${opts[@]}" "$target" >/dev/null 2>&1
-rc=$?
-secs=$((SECONDS - start))
 
-log=$(ls -t "$work"/*.build 2>/dev/null | grep -v '_amd64.build$' | head -1)
-[ -n "$log" ] || log=$(ls -t "$work"/*.build 2>/dev/null | head -1)
-failstage=$(grep -a -m1 '^Fail-Stage:' "$log" 2>/dev/null | awk '{print $2}')
-# Report sbuild's own job time (Package-Time) rather than wall time, which
-# also counts waiting in the slots queue. Fall back to wall time with no log.
-ptime=$(grep -a -m1 '^Package-Time:' "$log" 2>/dev/null | awk '{print $2}')
-[ -n "$ptime" ] && secs=$ptime
-status=$(grep -a -m1 '^Status:' "$log" 2>/dev/null | awk '{print $2}')
+# One sbuild run. Sets: rc, log, failstage, status, secs, res. $1 = extra DEB_BUILD_OPTIONS.
+run_sbuild() {
+  local start=$SECONDS
+  rm -f "$work"/*.build "$work"/*.changes "$work"/*.deb "$work"/*.buildinfo
+  DEB_BUILD_OPTIONS="$DEB_BUILD_OPTIONS ${1:-}" \
+  SLOT_MAX_MIN=$(( backstop_h * 60 + 15 )) SLOT_SIZE=$SIZE "$HOME/bin/slots" 1 "aqours:$STAGE:$SRC" \
+    timeout --kill-after=5m "${backstop_h}h" \
+    sbuild --chroot="$AQOURS_CHROOT" --dist=excalibur "${opts[@]}" "$target" >/dev/null 2>&1
+  rc=$?
+  secs=$((SECONDS - start))
+  log=$(ls -t "$work"/*.build 2>/dev/null | grep -v '_amd64.build$' | head -1)
+  [ -n "$log" ] || log=$(ls -t "$work"/*.build 2>/dev/null | head -1)
+  failstage=$(grep -a -m1 '^Fail-Stage:' "$log" 2>/dev/null | awk '{print $2}')
+  # sbuild's own job time (Package-Time), not wall time, which also counts queue waits.
+  local ptime; ptime=$(grep -a -m1 '^Package-Time:' "$log" 2>/dev/null | awk '{print $2}')
+  [ -n "$ptime" ] && secs=$ptime
+  status=$(grep -a -m1 '^Status:' "$log" 2>/dev/null | awk '{print $2}')
+  if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then res=hang
+  elif [ "$status" = successful ] && [ $rc -eq 0 ]; then res=ok
+  elif [ -n "$log" ]; then res=fail
+  else res=error; fi
+}
+
 dest="$logdir/${SRC}_${VER}.log.zst"
+run_sbuild
 [ -n "$log" ] && zstd -q -f -19 "$log" -o "$dest"
+
+# Stage 1: a failure in the build step (where the package's own tests run) is a
+# finding; keep its log as .check.log.zst and build once more with nocheck, so
+# the bootstrap can proceed. Result "oknc" = built, but its tests failed on Liella.
+if [ "$STAGE" = stage1 ] && [ "$res" = fail ] && [ "${failstage:-}" = build ]; then
+  mv -f "$dest" "$logdir/${SRC}_${VER}.check.log.zst"
+  first_secs=$secs
+  run_sbuild nocheck
+  [ -n "$log" ] && zstd -q -f -19 "$log" -o "$dest"
+  if [ "$res" = ok ]; then res=oknc; failstage=check; fi
+  secs=$((secs + first_secs))
+fi
+# For "oknc", the finding is in the first (with-tests) log; report that one.
+report_log=$dest
+[ "$res" = oknc ] && report_log="$logdir/${SRC}_${VER}.check.log.zst"
 cp -f "$work"/*.buildinfo "$logdir/" 2>/dev/null
 
-if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then res=hang
-elif [ "$status" = successful ] && [ $rc -eq 0 ]; then res=ok
-elif [ -n "$log" ]; then res=fail
-else res=error; fi
+# Stage 1 gate and staging for the bootstrap suite.
+if [ "$STAGE" = stage1 ] && { [ "$res" = ok ] || [ "$res" = oknc ]; }; then
+  allowed="${AQOURS_CHROOT%.tar.zst}.allowed-2.4x"
+  if [ ! -s "$allowed" ]; then
+    # The GLIBC_2.40/2.41 symbols the chroot's Liella libc.so.6 defines.
+    t=$(mktemp -d); tar --zstd -C "$t" -xf "$AQOURS_CHROOT" ./usr/lib/x86_64-linux-gnu/ 2>/dev/null
+    readelf --dyn-syms -W "$(readlink -f "$t/usr/lib/x86_64-linux-gnu/libc.so.6" || echo "$t/usr/lib/x86_64-linux-gnu/libc.so.6")" 2>/dev/null \
+      | awk '$7 != "UND" && $8 ~ /@GLIBC_2\.4[01]$/ { sub(/@@?/, "@", $8); print $8 }' | sort -u > "$allowed.tmp"
+    mv -f "$allowed.tmp" "$allowed"; rm -rf "$t"
+  fi
+  gatelog="$logdir/${SRC}_${VER}.gate.log"
+  if "$HOME/aqours/tools/elfgate" "$allowed" "$work"/*.deb > "$gatelog" 2>&1; then
+    stagedir="${AQOURS_INCOMING:?set AQOURS_INCOMING}/$STAGE/${SRC}_${VER}"
+    rm -rf "$stagedir"; mkdir -p "$stagedir"
+    changes=$(ls "$work"/*.changes | head -1)
+    cp "$changes" $(sed -n '/^Files:/,$p' "$changes" | awk 'NF==5{print "'"$work"'/"$5}') "$stagedir"/
+  else
+    res=fail; failstage=aqours-gate
+    zstd -q -f "$gatelog" -o "$gatelog.zst" && rm -f "$gatelog"; report_log="$gatelog.zst"
+  fi
+  [ -f "$gatelog" ] && { zstd -q -f "$gatelog" -o "$gatelog.zst"; rm -f "$gatelog"; }
+fi
 
 cd /; rm -rf "$work"
-line="RESULT $res $secs ${failstage:--} $dest"
+line="RESULT $res $secs ${failstage:--} $report_log"
 # Also leave the result beside the log, so a restarted driver can pick it up.
 echo "$line" > "$logdir/${SRC}_${VER}.result.tmp" && mv -f "$logdir/${SRC}_${VER}.result.tmp" "$logdir/${SRC}_${VER}.result"
 echo "$line"

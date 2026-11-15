@@ -1,0 +1,39 @@
+#!/bin/bash
+# elfgate: check binary packages built against Liella (stage 1, decision 12).
+#
+#   tools/elfgate ALLOWED-2.4x-SYMBOLS DEB...
+#
+# ALLOWED-2.4x-SYMBOLS lists "symbol@GLIBC_2.4x" entries that Liella's libc.so.6
+# defines (Liella's label stays 2.39 while it implements some later symbols).
+# Each DEB is refused when any of its ELF objects:
+#   - needs a GLIBC_2.40/GLIBC_2.41 symbol that Liella does not define (the
+#     throwaway headers are glibc 2.41's, so a configure check or a fortify
+#     redirect can bind one), or
+#   - names libmvec (Liella has none),
+# or when its control file depends on libc6 (>= 2.40) or (>= 2.41) (it then
+# could not be installed on Liella, whose version sorts below 2.40).
+# Prints one "GATE <PASS|FAIL> <deb> [reason]" line per package; exit 1 if any fails.
+set -uo pipefail
+ALLOWED=${1:?usage: elfgate ALLOWED-2.4x-SYMBOLS DEB...}; shift
+[ -r "$ALLOWED" ] || { echo "elfgate: cannot read $ALLOWED" >&2; exit 2; }
+bad=0
+for deb in "$@"; do
+  name=$(basename "$deb")
+  why=""
+  dep=$(dpkg-deb -f "$deb" Depends Pre-Depends 2>/dev/null | grep -oE 'libc6 \(>= 2\.4[01][^)]*\)' | head -1)
+  [ -n "$dep" ] && why+="depends on $dep; "
+  x=$(mktemp -d); dpkg-deb -x "$deb" "$x"
+  while IFS= read -r -d '' f; do
+    head -c 4 "$f" 2>/dev/null | grep -q 'ELF' || continue
+    rel=${f#"$x"}
+    readelf -dW "$f" 2>/dev/null | grep -q 'NEEDED.*\[libmvec\.so' && why+="$rel needs libmvec; "
+    extra=$(readelf --dyn-syms -W "$f" 2>/dev/null \
+      | awk '$7 == "UND" && $8 ~ /@GLIBC_2\.4[01]/ { sub(/ \(.*/, "", $8); print $8 }' | sort -u \
+      | comm -23 - <(sort -u "$ALLOWED") | tr '\n' ' ')
+    [ -n "$extra" ] && why+="$rel needs $extra; "
+  done < <(find "$x" -type f -print0)
+  rm -rf "$x"
+  if [ -z "$why" ]; then echo "GATE PASS $name"
+  else echo "GATE FAIL $name ${why%; }"; bad=1; fi
+done
+exit $bad
