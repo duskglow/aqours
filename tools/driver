@@ -5,6 +5,7 @@
     tools/driver run STAGE                  dispatch until the stage's queue is empty
     tools/driver status [STAGE]             counts and the failures so far
     tools/driver failures STAGE             failed jobs with their failure stage and log
+    tools/driver resig STAGE                recompute failure signatures (after changing the rule)
 
 Settings come from ~/aqours/driver.conf (JSON):
   {"db": ".../aqours.db", "events": ".../events.log",
@@ -63,9 +64,15 @@ def signature(failstage, logpath, host):
     """A coarse failure signature: the failing stage plus the first error-looking line."""
     if not logpath or logpath == "-":
         return failstage or "nolog"
+    # The first line that names the actual failure: a debhelper error, a compiler
+    # error, a test-suite FAIL, or an sbuild E: line other than the generic
+    # "Build failure". Anchored, because sbuild's preamble has lines like
+    # "I: NOTICE: ..." that loose patterns match in every log.
+    pattern = r"(^dh_[a-z_]+: error:|: (fatal )?error:|^FAIL: |^E: |^make(\[[0-9]+\])?: \*\*\*)"
     try:
         out = subprocess.run(["ssh", "-o", "BatchMode=yes", host,
-                              f"zstdcat {logpath} | grep -a -m1 -E '(error:|Error [0-9]|FAIL:|E: |dpkg-buildpackage: error)' "
+                              f"zstdcat {logpath} | grep -a -E '{pattern}' | grep -av -e 'E: Build failure' "
+                              "-e 'dpkg-buildpackage: error' -e 'make: \\*\\*\\* \\[debian/rules' | head -1 "
                               "| sed -E 's/[0-9]+/N/g; s#/[^ ]*/#/…/#g' | cut -c1-160"],
                              capture_output=True, text=True, timeout=60).stdout.strip()
     except Exception:
@@ -155,6 +162,17 @@ def status(stage=None):
         print(f"{row[0]:10} {row[1]:8} {row[2]:5}  {(row[3] or 0) / 3600:7.1f} build-hours")
 
 
+def resig(stage):
+    """Recompute the failure signatures of a stage's failed jobs (after a signature fix)."""
+    c = conf(); con = db(c); hosts = c["hosts"]
+    for src, ver, host, fstage, log in con.execute(
+            "select source, version, host, failstage, log from jobs where stage=? and status in ('fail','hang')",
+            (stage,)).fetchall():
+        sig = signature(fstage, log, hosts[host]["ssh"])
+        con.execute("update jobs set signature=? where stage=? and source=? and version=?", (sig, stage, src, ver))
+        print(f"{src} {ver}: {sig}")
+
+
 def failures(stage):
     c = conf(); con = db(c)
     for row in con.execute("select source, version, status, host, failstage, signature, log from jobs "
@@ -168,4 +186,5 @@ if __name__ == "__main__":
     elif a[:1] == ["run"] and len(a) == 2: run(a[1])
     elif a[:1] == ["status"]: status(a[1] if len(a) > 1 else None)
     elif a[:1] == ["failures"] and len(a) == 2: failures(a[1])
+    elif a[:1] == ["resig"] and len(a) == 2: resig(a[1])
     else: print(__doc__); sys.exit(2)
