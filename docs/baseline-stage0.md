@@ -1,7 +1,6 @@
 # Stage 0 baseline: T1 rebuilt with glibc
 
-Status: **complete except gcc-14**, which is being rebuilt with a longer time limit (see "gcc-14" below). Run of
-2026-11-15.
+Status: **complete.** Run of 2026-11-15 (gcc-14 finished 23:05 UTC, after a rebuild with a longer time limit).
 
 Stage 0 rebuilds every source package of tier T1 (a base Devuan excalibur system, 173 source packages) with
 **glibc**, on the same infrastructure later stages use. Every later stage is compared against it: a package that
@@ -19,9 +18,8 @@ builds and passes its tests here but fails with Liella points at Liella; one tha
 
 | | Count |
 |---|---|
-| Built and passed their own tests | **171** |
-| Failed | **1** (elfutils) |
-| Being rebuilt (time limit) | 1 (gcc-14) |
+| Built and passed their own tests | **172** (gcc-14 included; see below) |
+| Failed | **1** (elfutils, fixed by an Aqours patch) |
 
 **The one failure, elfutils 0.192-4:** packaging aborts because `/etc/debuginfod/elfutils.urls` is missing. The
 packaging only creates that file when a default debuginfod server URL is configured. The URL is derived from the OS
@@ -29,15 +27,28 @@ identity in base-files, which here is Devuan's, so it comes out empty; on Debian
 server. All 283 of its tests passed. **Fixed** by the Aqours `build-fix` patch in `packages/elfutils/`, verified: with
 it, elfutils builds and passes its tests (stage `stage0p`).
 
-**gcc-14 14.2.0-19:** compiles in about 4 hours, then runs its test suite in three configurations (default,
-`-fstack-protector`, `-m32`), which needs roughly 12–14 hours more. It was stopped by the general 8-hour backstop in
-the second configuration; that isn't a package result. It is being rebuilt with a 24-hour backstop for gcc. Note for
-later: the `-m32` configuration tests 32-bit code generation, which Aqours doesn't ship (no multilib, design section
-1); building Aqours's gcc without multilib would remove it.
+**gcc-14 14.2.0-19: built** in 8 h 14 min (sbuild `Package-Time`), with 16 parallel jobs. The first attempt was
+stopped by the general 8-hour backstop, which isn't a package result; the rebuild had a 24-hour backstop for gcc.
+Most of the time isn't the native compiler. Debian's package also builds the JIT library, an hppa64 cross compiler and
+the NVIDIA and AMD GPU offload compilers, then runs the test suite in three configurations (default,
+`-fstack-protector`, `-m32`).
+
+Like Debian's, gcc's packaging records test failures without failing the build. This run had 215 distinct failing
+tests, a small fraction of the suite. That's the glibc reference that stage 1 is compared against, test by test:
+- 102 are the `-fhardened` tests under C++ options (`c-c++-common/fhardened-*`), which conflict with the hardening
+  flags Debian's gcc enables by default;
+- 35 are ThreadSanitizer (`tsan`), and 42 are OpenMP runtime (`libgomp`), both timing- and scheduling-sensitive on a
+  shared, over-committed VM;
+- the rest are scattered: 22 in `gcc.dg`, 3 in `gcc.target/i386`, and about ten in Go and its runtime.
+
+Note for later: the `-m32` configuration tests 32-bit code generation, which Aqours doesn't ship (no multilib, design
+section 1), and decision 16 already drops the GPU offload compilers for the bootstrap. Together they account for
+most of gcc's build time.
 
 ## Build times
 
-From sbuild's own accounting (`Build-Time`), for the 172 finished builds: **14.4 build-hours** in total.
+From sbuild's own accounting (`Build-Time`), for all 173 builds: **about 22.6 build-hours** in total, over a third of
+it gcc-14.
 
 | Build time | Packages |
 |---|---|
@@ -45,7 +56,7 @@ From sbuild's own accounting (`Build-Time`), for the 172 finished builds: **14.4
 | 2–10 minutes | 44 |
 | 10–30 minutes | 9 |
 | 30–60 minutes | 2 |
-| over 1 hour | 3 (python3.13 175 min, binutils 152 min, glibc 64 min) |
+| over 1 hour | 4 (gcc-14 494 min, python3.13 175 min, binutils 152 min, glibc 64 min) |
 
 Wall time is set by the few long test suites, not by the number of packages. That's the main input for planning the
 larger tiers.
