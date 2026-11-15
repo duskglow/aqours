@@ -91,11 +91,24 @@ incoming directory in Aqours storage. The coordination host verifies and signs t
 - **Following Devuan:** a daily job diffs excalibur and excalibur-security/-updates `Sources` and queues a rebuild
   for each changed source. Security updates go first.
 
-## 4. Bootstrap: from a glibc system to one without it
+## 4. Bootstrap: like making a compiler self-hosting
 
-A system without glibc can't be built by stock excalibur tools. They are linked against glibc 2.41, and Liella can't
-yet run them (no soname search at start-up yet; GLIBC_2.40/2.41 symbols missing). So Aqours bootstraps in stages. Each
-stage is built by the previous stage's tools.
+Aqours bootstraps the way a compiler becomes self-hosting (decision 17):
+
+| Compiler bootstrap | Aqours |
+|---|---|
+| **Host compiler:** an existing compiler you didn't build | **Devuan's binaries:** gcc, apt, cmake, perl and the rest, in the build chroot |
+| **Stage 1:** the new compiler built *by* the host compiler | **Stage 1:** T0 + T1 (what ships) rebuilt against Liella *using* Devuan's tools |
+| **Stage 2:** rebuilt by the stage 1 compiler; the host no longer involved | **Stage 2:** everything rebuilt with Aqours-built packages only, which needs T2 (the build-only tools) built too |
+| **Stage 3:** rebuilt again; stage 2 and 3 must be identical (the fixpoint) | **Stage 3:** rebuilt again and compared with stage 2 |
+| **Self-hosted** | Aqours rebuilds itself from its own repository |
+
+Two differences from a compiler, both noted by the owner:
+- **The host tools already run on the target runtime.** Liella keeps glibc's ABI, so Devuan's binaries run *on Liella*
+  in the stage 1 chroot (decision 12). Stage 1 therefore exercises Liella heavily, not just the new build.
+- **The "compiler" is very large, and not entirely reducible.** It's the whole build closure, T0 + T1 + T2, about
+  1,000 source packages. Decisions 13–16 cut T2 from 2,361 to roughly 700–850 sources; the rest is the real cost of
+  self-hosting. It is not waste.
 
 **Stage 0: the glibc reference (no Liella needed).** Do a no-change rebuild of each tier with stock excalibur and
 glibc, on the same infrastructure. It serves three purposes:
@@ -111,8 +124,9 @@ testing but not as the shipped design.
 **Stage 1: build with Liella swapped into the build environment** (decision 12). The build chroot (trixie with
 excalibur over it) gets Liella's *system flavour* (`libc6`, `libc-bin`, `libc6-dev`, version `2.39+liella…`)
 installed over glibc's. Every program in it, compilers and apt included, then runs on Liella. Plain `gcc` links against
-Liella, and `dpkg-shlibdeps` records dependencies from Liella's symbols file. This builds the **build-essential
-closure** (tier 0) into the `bootstrap` suite.
+Liella, and `dpkg-shlibdeps` records dependencies from Liella's symbols file. This builds **T0 and T1**, the packages
+that ship, into the `bootstrap` suite. The tools that build them, T2 included, are Devuan's binaries running on Liella:
+the host toolchain, in compiler terms.
 - **Why not the coexistence wrapper:** `liella-gcc` links inside Liella's own sysroot, so every package that links
   another library would need per-package special handling. The swap needs none, and every build tool that breaks on
   Liella is a Liella bug found early, which is the point of the exercise.
@@ -139,13 +153,18 @@ closure** (tier 0) into the `bootstrap` suite.
 - **Needs from Liella:** items 1–4 of section 7, plus working C++ (`libstdc++`) and, for packages that need root to
   build, `LD_PRELOAD` (fakeroot). Stage 1 doubles as Liella's planned swap smoke test (SL-SWAP-SMOKE).
 
-**Stage 2: native, glibc-free.** The chroot contains only stage-1 packages and Liella's `libc6` packages, with
-**no glibc**. Its first job is rebuilding tier 0 from source inside itself; that proves self-hosting. Then it builds
-tier 1 and up, in dependency order, **with** build-time tests. The results go to `aqours-unstable`.
+**Stage 2: no host tools.** The build chroot holds only Aqours-built packages and Liella's `libc6` family; no Devuan
+binary that links libc is used. So T2 must be built first: in stage 1's environment, with the bootstrap profiles and
+trims of decisions 15–16. Then T0 + T1 + T2 are rebuilt in dependency order inside the stage 2 chroot. Results go to
+`unstable`.
 
-**Stage 3: rebuild again.** Rebuild tiers 0–1 once more in an environment made entirely of stage-2 output, then
-compare to stage 2 (with `diffoscope`, sampled). Any difference is a nondeterminism or a stage-1 leftover to explain.
-After stage 3, `aqours-bootstrap` is deleted and the tiers grow on stage-2/3 tools.
+**Stage 3: the fixpoint.** Rebuild everything once more in an environment made entirely of stage 2 output, then
+compare with stage 2 (`diffoscope`, sampled, then all). Any difference is a nondeterminism or a host leftover to
+explain. After stage 3, `bootstrap` is deleted, Aqours is self-hosting, and the full pass (documentation, tests,
+features restored, ghc) builds on stage 3's tools.
+
+**Where Snow Halation ships from is an open owner decision.** Recommended: after the stage 3 fixpoint, as a compiler
+would; stage 1 output is never shipped.
 
 ## 5. Tiers
 
@@ -156,7 +175,7 @@ gate is tested in a nested-KVM VM.
 |---|---|---|
 | T0 | Essential + build-essential closure (gcc, binutils, make, dpkg-dev, perl, coreutils, bash, tar, ...) | Builds itself in stage 2 |
 | T1 | A base Devuan system: what a default Devuan base install contains (required + important + standard, sysvinit, eudev, kernel, bootloader, networking, apt), plus Aqours's identity packages | **"First light":** a VM boots to a login, runs `apt update`, and builds hello world, with no glibc on the system. **This is the scope of Snow Halation** (owner decision 2). |
-| T2 | The build dependencies of T0–T1 not already in them | Aqours rebuilds itself from its own repository |
+| T2 | The build dependencies of T0–T1 not already in them (with decisions 13–16: roughly 700–850 sources) | Built for stage 2; Aqours rebuilds itself from its own repository |
 | T3 | Common server and developer packages (ssh, web servers, databases, Python/Perl/Rust/Go stacks) | autopkgtest pass rate measured against stage 0 |
 | T4 | The rest of `main`, best effort | Failures tracked per package; nothing blocks on T4 |
 
@@ -296,4 +315,5 @@ The owner's decisions, 2026-11-15.
 | 14 | Bootstrap ghc and Haskell on Liella for pandoc-built documentation? | **Not now** (owner, 2026-11-15): the packages that need `pandoc` only for documentation are built with the `nodoc` profile (libavif, libmaxminddb) or patched to allow it (dose3, flac, gssdp, openxr-sdk-source, pmdk, rdma-core, xen), each documented under `packages/`. This keeps ghc and about 260 Haskell libraries off the critical path. **Doing it "the right way" stays a goal:** a later milestone brings up ghc on Liella (also a demanding test of Liella) and then reverts these changes. |
 | 15 | Build documentation and tests during the bootstrap? | **No documentation and no T2 tests until the system works** (owner, 2026-11-15: "There is no point in building docs, etc., if the base system doesn't even work, and it just slows things down."). The bootstrap builds with the `nodoc` profile throughout and adds `nocheck` for T2, the packages needed only to build others. T0 and T1 keep their tests in stage 1, because they are the main signal for Liella bugs; a test failure there is recorded and the package rebuilt with `nocheck`. A full pass with documentation and tests follows once the system rebuilds itself. |
 | 16 | Build optional features during the bootstrap? | **No: the bootstrap is a minimal subset** (owner, 2026-11-15: "A bootstrap is, pretty much by definition, a subset of a full featured build. The goal right now is just to get a minimal build working with Liella."). Packages whose optional features pull in large build-dependency chains (a GUI, Bluetooth, extra compiler front ends, TeX output, Java bindings) are built without them during the bootstrap: through a Debian build profile where the package defines one, or a small documented patch (`packages/<source>/`, `drop-build-deps`). The full pass, once the system rebuilds itself, builds them with their features; Snow Halation ships only full-pass packages. glibc is never built (Liella replaces it). |
+| 17 | How is the bootstrap structured? | **Like making a compiler self-hosting** (owner, 2026-11-15: "That framing does match my intent… it may not be entirely reducible."). Stage 1 builds what ships (T0 + T1) with Devuan's binaries as the host toolchain, running on Liella. Stage 2 uses only Aqours-built packages, so T2 (the build-only tools) is built for it. Stage 3 rebuilds and checks the fixpoint. See section 4. |
 
