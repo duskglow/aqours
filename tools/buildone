@@ -97,6 +97,9 @@ start=$SECONDS
 # gcc or binutils with their test suites run longer. Our own backstop below is
 # the only time limit, so lift the queue's cap just above it.
 backstop_h=${AQOURS_BUILD_BACKSTOP_H:-8}
+# gcc's test suite runs in three configurations (default, -fstack-protector,
+# -m32) and takes far longer than any other package; give it its own backstop.
+case "$SRC" in gcc-1[0-9]) backstop_h=${AQOURS_GCC_BACKSTOP_H:-24};; esac
 # slots pins each job to a block of cores (it serves timing runs too). Builds
 # need no pinning, and some test suites assume CPU 0 is in their affinity mask
 # (libuv's thread_affinity), so pinning makes results depend on which block a
