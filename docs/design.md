@@ -272,4 +272,5 @@ The owner's decisions, 2026-11-15.
 | 7 | Spelling | **`aqours`**, after the Love Live! Sunshine!! group, everywhere. |
 | 8 | Codename | **Snow Halation** for the first release (suite `snowhalation`). |
 | 9 | Init system | **Devuan's sysvinit**, chosen for having fewer moving parts. Integration with larger distributions may come later as a separate experiment. |
+| 10 | May stage 1 compile with glibc's headers before Liella's own exist? | **Yes, as a throwaway only**, to unblock the short term. Nothing built that way ships; stages 2 and 3 rebuild everything with Liella's headers. |
 
