@@ -1,0 +1,59 @@
+#!/bin/bash
+# buildone: build one source package on this build host and report the result.
+#
+#   tools/buildone STAGE SOURCE VERSION
+#
+# Runs sbuild (unshare mode, through the host's `slots` queue), keeps the log
+# and .buildinfo in $AQOURS_LOGS/STAGE/, deletes the build tree and outputs, and
+# prints one result line last:
+#   RESULT <ok|fail|hang|error> <seconds> <failstage> <log path>
+# Stage "stage0" is the glibc reference rebuild: architecture-dependent
+# binaries only (Architecture: all is imported, not rebuilt), with the
+# package's own build-time tests on. Nothing from stage0 is published.
+# Needs ~/aqours/env (AQOURS_CHROOT, AQOURS_SCRATCH, AQOURS_LOGS, SBUILD_CONFIG, ...).
+set -uo pipefail
+STAGE=${1:?usage: buildone STAGE SOURCE VERSION}; SRC=${2:?}; VER=${3:?}
+. "$HOME/aqours/env"
+: "${AQOURS_LOGS:?set AQOURS_LOGS}" "${AQOURS_CHROOT:?}" "${AQOURS_SCRATCH:?}"
+
+# Sources whose build trees don't fit in RAM scratch build on local disk.
+case "$SRC" in
+  gcc-1[0-9]|glibc|llvm-toolchain-*|rustc|rust-*|linux|firefox-esr|thunderbird|libreoffice|openjdk-*|qtwebengine-*|chromium|webkit2gtk|mesa|python3.1[0-9]|binutils|systemd|perl)
+    export AQOURS_SCRATCH=${AQOURS_SCRATCH_DISK:-$AQOURS_SCRATCH};;
+esac
+case "$SRC" in rust-*|rustc|llvm-toolchain-*|gcc-1[0-9]|glibc|linux|libreoffice|firefox-esr|chromium) SIZE=L;; *) SIZE=M;; esac
+
+work="$HOME/aqours/out/$STAGE/${SRC}_${VER}"
+logdir="$AQOURS_LOGS/$STAGE"
+rm -rf "$work"; mkdir -p "$work" "$logdir"
+cd "$work" || exit 1
+
+case "$STAGE" in
+  stage0) opts=(--no-arch-all --arch-any); dbo="noautodbgsym";;
+  *) echo "RESULT error 0 - unknown-stage"; exit 2;;
+esac
+jobs=${AQOURS_JOBS:-8}; [ "$SIZE" = L ] && jobs=$((jobs * 2))
+export DEB_BUILD_OPTIONS="parallel=$jobs $dbo"
+
+start=$SECONDS
+SLOT_SIZE=$SIZE "$HOME/bin/slots" 1 "aqours:$STAGE:$SRC" \
+  timeout --kill-after=5m "${AQOURS_BUILD_BACKSTOP:-8h}" \
+  sbuild --chroot="$AQOURS_CHROOT" --dist=excalibur "${opts[@]}" "${SRC}_${VER}" >/dev/null 2>&1
+rc=$?
+secs=$((SECONDS - start))
+
+log=$(ls -t "$work"/*.build 2>/dev/null | grep -v '_amd64.build$' | head -1)
+[ -n "$log" ] || log=$(ls -t "$work"/*.build 2>/dev/null | head -1)
+failstage=$(grep -a -m1 '^Fail-Stage:' "$log" 2>/dev/null | awk '{print $2}')
+status=$(grep -a -m1 '^Status:' "$log" 2>/dev/null | awk '{print $2}')
+dest="$logdir/${SRC}_${VER}.log.zst"
+[ -n "$log" ] && zstd -q -f -19 "$log" -o "$dest"
+cp -f "$work"/*.buildinfo "$logdir/" 2>/dev/null
+
+if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then res=hang
+elif [ "$status" = successful ] && [ $rc -eq 0 ]; then res=ok
+elif [ -n "$log" ]; then res=fail
+else res=error; fi
+
+cd /; rm -rf "$work"
+echo "RESULT $res $secs ${failstage:--} $dest"

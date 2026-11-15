@@ -1,0 +1,151 @@
+#!/usr/bin/python3 -I
+"""tiers: compute the Aqours tier package sets from the excalibur archive.
+
+    tools/tiers [--suite excalibur] OUTDIR
+
+Needs AQOURS_MIRROR (Devuan mirror base URL) and AQOURS_KEYRINGS. Uses apt's own
+resolver (a simulated install into an empty system with a private apt
+configuration, signatures checked against the pinned keyring), so a tier is
+exactly what a real install of its seeds would contain.
+
+For each tier T writes:
+  OUTDIR/T.binaries  every binary package in the installation set, "name version"
+  OUTDIR/T.rebuild   source packages Aqours rebuilds (they have a binary that
+                     may link libc), "source version"
+  OUTDIR/T.import    binaries imported from Devuan unchanged (Architecture: all,
+                     kernel images, linux-libc-dev; owner decision 1)
+Tiers are cumulative: T1 contains T0.
+"""
+import gzip, os, re, subprocess, sys, tempfile
+
+SEEDS = {
+    # T0: the build environment. Essential packages plus build-essential and apt; no recommends.
+    "T0": {"recommends": False, "seeds": ["@essential", "build-essential", "apt", "fakeroot"]},
+    # T1: a base Devuan system as the installer makes it (required + important + standard),
+    # with sysvinit, eudev, a kernel, a bootloader and ifupdown; recommends on, as an install does.
+    "T1": {"recommends": True, "seeds": ["@T0", "@priority:required", "@priority:important",
+                                          "@priority:standard", "init", "sysvinit-core", "eudev",
+                                          "linux-image-amd64", "grub-pc", "ifupdown"]},
+}
+# Binaries that contain nothing linking libc, imported rather than rebuilt (decision 1),
+# besides Architecture: all.
+IMPORT_SOURCES = re.compile(r"^(linux|linux-signed-amd64|firmware-.*)$")
+
+
+def die(msg):
+    print("tiers: " + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def read_stanzas(path):
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as f:
+        stanza, last = {}, None
+        for line in f:
+            if line == "\n":
+                if stanza:
+                    yield stanza
+                stanza, last = {}, None
+            elif line[0] in " \t":
+                if last:
+                    stanza[last] += "\n" + line.rstrip("\n")
+            else:
+                k, _, v = line.partition(":")
+                last = k
+                stanza[k] = v.strip()
+        if stanza:
+            yield stanza
+
+
+def main():
+    args = sys.argv[1:]
+    suite = "excalibur"
+    if args[:1] == ["--suite"]:
+        suite, args = args[1], args[2:]
+    if len(args) != 1:
+        die("usage: tiers [--suite SUITE] OUTDIR")
+    outdir = args[0]
+    mirror = os.environ.get("AQOURS_MIRROR") or die("set AQOURS_MIRROR")
+    keyrings = os.environ.get("AQOURS_KEYRINGS") or die("set AQOURS_KEYRINGS")
+    keyring = os.path.join(keyrings, "devuan-archive-keyring.gpg")
+    os.makedirs(outdir, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="aqours-tiers.", dir=os.environ.get("AQOURS_SCRATCH")) as root:
+        for d in ("etc/apt/apt.conf.d", "etc/apt/preferences.d", "etc/apt/sources.list.d",
+                  "var/lib/apt/lists/partial", "var/cache/apt/archives/partial", "var/lib/dpkg"):
+            os.makedirs(os.path.join(root, d), exist_ok=True)
+        open(os.path.join(root, "var/lib/dpkg/status"), "w").close()
+        with open(os.path.join(root, "etc/apt/sources.list"), "w") as f:
+            for s in (suite, suite + "-updates", suite + "-security"):
+                f.write(f"deb [arch=amd64 signed-by={keyring}] {mirror} {s} main\n")
+        conf = os.path.join(root, "apt.conf")
+        with open(conf, "w") as f:
+            f.write(f'Dir "{root}/";\nDir::State::status "{root}/var/lib/dpkg/status";\n'
+                    'APT::Architecture "amd64";\nAPT::Architectures { "amd64"; };\n'
+                    'Acquire::Languages "none";\nDebug::NoLocking "true";\n')
+        env = dict(os.environ, APT_CONFIG=conf)
+        r = subprocess.run(["apt-get", "update", "-q", "--error-on=any"], env=env, capture_output=True, text=True)
+        if r.returncode:
+            die("apt-get update failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+
+        # Index every candidate binary: name -> (version, source, source version, arch, priority, essential)
+        lists = os.path.join(root, "var/lib/apt/lists")
+        pkgs = {}
+        for fn in sorted(os.listdir(lists)):
+            if not fn.endswith("_Packages"):
+                continue
+            for st in read_stanzas(os.path.join(lists, fn)):
+                name, ver = st["Package"], st["Version"]
+                src = st.get("Source", name)
+                m = re.match(r"^(\S+)(?:\s+\((.+)\))?$", src)
+                srcname, srcver = m.group(1), (m.group(2) or ver)
+                old = pkgs.get(name)
+                if old and subprocess.run(["dpkg", "--compare-versions", ver, "le", old[0]]).returncode == 0:
+                    continue
+                pkgs[name] = (ver, srcname, srcver, st.get("Architecture", ""),
+                              st.get("Priority", ""), st.get("Essential", "") == "yes")
+
+        results = {}
+        for tier, spec in SEEDS.items():
+            seeds = []
+            for s in spec["seeds"]:
+                if s == "@essential":
+                    seeds += [n for n, p in pkgs.items() if p[5]]
+                elif s.startswith("@priority:"):
+                    want = s.split(":", 1)[1]
+                    seeds += [n for n, p in pkgs.items() if p[4] == want]
+                elif s.startswith("@T"):
+                    seeds += [n for n, _ in results[s[1:]]]
+                else:
+                    seeds.append(s)
+            seeds = sorted(set(seeds))
+            cmd = ["apt-get", "install", "-s", "-q", "-o", "APT::Get::Show-Versions=1",
+                   "--install-recommends" if spec["recommends"] else "--no-install-recommends"] + seeds
+            r = subprocess.run(cmd, env=env, capture_output=True, text=True)
+            if r.returncode:
+                die(f"{tier}: apt could not resolve the seeds:\n" + r.stdout[-3000:] + r.stderr[-3000:])
+            inst = re.findall(r"^Inst (\S+) \((\S+)", r.stdout, re.M)
+            results[tier] = sorted(set(inst))
+
+            rebuild, imported = {}, []
+            for name, ver in results[tier]:
+                p = pkgs.get(name)
+                if not p:
+                    die(f"{tier}: {name} is in the installation set but not in the index")
+                _, srcname, srcver, arch, _, _ = p
+                if arch == "all" or IMPORT_SOURCES.match(srcname) or name == "linux-libc-dev":
+                    imported.append((name, ver))
+                else:
+                    rebuild[srcname] = srcver
+            with open(os.path.join(outdir, tier + ".binaries"), "w") as f:
+                f.writelines(f"{n} {v}\n" for n, v in results[tier])
+            with open(os.path.join(outdir, tier + ".rebuild"), "w") as f:
+                f.writelines(f"{s} {v}\n" for s, v in sorted(rebuild.items()))
+            with open(os.path.join(outdir, tier + ".import"), "w") as f:
+                f.writelines(f"{n} {v}\n" for n, v in imported)
+            print(f"{tier}: {len(results[tier])} binaries, {len(rebuild)} sources to rebuild, "
+                  f"{len(imported)} binaries imported")
+
+
+if __name__ == "__main__":
+    main()

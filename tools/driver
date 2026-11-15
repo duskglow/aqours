@@ -1,0 +1,171 @@
+#!/usr/bin/python3 -I
+"""driver: queue and dispatch Aqours builds to the build hosts, and record results.
+
+    tools/driver enqueue STAGE LISTFILE     add "source version" lines as queued jobs
+    tools/driver run STAGE                  dispatch until the stage's queue is empty
+    tools/driver status [STAGE]             counts and the failures so far
+    tools/driver failures STAGE             failed jobs with their failure stage and log
+
+Settings come from ~/aqours/driver.conf (JSON):
+  {"db": ".../aqours.db", "events": ".../events.log",
+   "hosts": {"hostA": {"ssh": "user@hostA", "max": 4}, ...}}
+
+Operating rules (learned by Liella, adopted by Aqours):
+  - No retries: a failure is a result, recorded once. Requeue by hand after a fix.
+  - Systemic detector: when the same failure signature hits 3 or more different
+    sources, dispatch stops and an event is raised. Fix the shared cause first.
+  - The build host's slots queue decides what fits on its cores; the driver only
+    keeps up to "max" jobs outstanding per host.
+  - Large sources are dispatched first so they don't straggle at the end.
+  - Notable events (stage done, systemic stop, host trouble) are appended to the
+    events file, one line per condition.
+"""
+import json, os, re, sqlite3, subprocess, sys, threading, time
+
+CONF = os.path.expanduser(os.environ.get("AQOURS_DRIVER_CONF", "~/aqours/driver.conf"))
+BIG = re.compile(r"^(gcc-1\d|glibc|llvm-toolchain-.*|rustc|rust-.*|linux|binutils|systemd|perl|python3\.1\d|"
+                 r"openssl|util-linux|gnutls28|krb5|bind9|vim|grub2|elfutils|gnupg2|apparmor|exim4|openssh)$")
+SYSTEMIC = 3
+
+
+def conf():
+    with open(CONF) as f:
+        return json.load(f)
+
+
+def db(c):
+    con = sqlite3.connect(c["db"], timeout=60, isolation_level=None)
+    con.execute("""create table if not exists jobs(
+        stage text, source text, version text, status text, host text,
+        queued real, started real, finished real, secs integer,
+        failstage text, signature text, log text,
+        primary key(stage, source, version))""")
+    return con
+
+
+def event(c, line):
+    with open(c["events"], "a") as f:
+        f.write(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()) + " DRIVER " + line + "\n")
+
+
+def enqueue(stage, listfile):
+    c = conf(); con = db(c); n = 0
+    for line in open(listfile):
+        parts = line.split()
+        if len(parts) >= 2:
+            cur = con.execute("insert or ignore into jobs(stage,source,version,status,queued) values(?,?,?,?,?)",
+                              (stage, parts[0], parts[1], "queued", time.time()))
+            n += cur.rowcount
+    print(f"enqueued {n} new jobs for {stage}")
+
+
+def signature(failstage, logpath, host):
+    """A coarse failure signature: the failing stage plus the first error-looking line."""
+    if not logpath or logpath == "-":
+        return failstage or "nolog"
+    try:
+        out = subprocess.run(["ssh", "-o", "BatchMode=yes", host,
+                              f"zstdcat {logpath} | grep -a -m1 -E '(error:|Error [0-9]|FAIL:|E: |dpkg-buildpackage: error)' "
+                              "| sed -E 's/[0-9]+/N/g; s#/[^ ]*/#/…/#g' | cut -c1-160"],
+                             capture_output=True, text=True, timeout=60).stdout.strip()
+    except Exception:
+        out = ""
+    return f"{failstage}: {out}" if out else (failstage or "unknown")
+
+
+def run(stage):
+    c = conf(); hosts = c["hosts"]
+    lock = threading.Lock()
+    stop = threading.Event()
+    outstanding = {h: 0 for h in hosts}
+
+    def next_job():
+        con = db(c)
+        rows = con.execute("select source, version from jobs where stage=? and status='queued'", (stage,)).fetchall()
+        if not rows:
+            return None
+        rows.sort(key=lambda r: (0 if BIG.match(r[0]) else 1, r[0]))
+        src, ver = rows[0]
+        con.execute("update jobs set status='running', started=? where stage=? and source=? and version=?",
+                    (time.time(), stage, src, ver))
+        return src, ver
+
+    def worker(h, src, ver):
+        ssh = hosts[h]["ssh"]
+        con = db(c)
+        con.execute("update jobs set host=? where stage=? and source=? and version=?", (h, stage, src, ver))
+        try:
+            p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=60", ssh,
+                                f"~/aqours/tools/buildone {stage} {src} {ver}"],
+                               capture_output=True, text=True)
+            m = re.search(r"^RESULT (\S+) (\d+) (\S+) (\S+)$", p.stdout, re.M)
+            if m:
+                res, secs, fstage, log = m.group(1), int(m.group(2)), m.group(3), m.group(4)
+            else:
+                res, secs, fstage, log = "error", 0, "-", "-"
+                event(c, f"host-trouble {h}: buildone gave no result for {src} {ver} (ssh exit {p.returncode}): "
+                         + (p.stderr.strip().splitlines() or ["-"])[-1][:200])
+            sig = None if res == "ok" else signature(fstage, log, ssh)
+            con.execute("update jobs set status=?, finished=?, secs=?, failstage=?, signature=?, log=? "
+                        "where stage=? and source=? and version=?",
+                        (res, time.time(), secs, fstage, sig, log, stage, src, ver))
+            print(f"{time.strftime('%H:%M:%S')} {h:6} {res:5} {secs:6}s {src} {ver}" + (f"  [{sig}]" if sig else ""),
+                  flush=True)
+            if sig:
+                n = con.execute("select count(distinct source) from jobs where stage=? and signature=?",
+                                (stage, sig)).fetchone()[0]
+                if n >= SYSTEMIC and not stop.is_set():
+                    stop.set()
+                    event(c, f"systemic-stop {stage}: signature hit {n} sources: {sig}")
+        finally:
+            with lock:
+                outstanding[h] -= 1
+
+    threads = []
+    while not stop.is_set():
+        launched = False
+        with lock:
+            for h in hosts:
+                if outstanding[h] < hosts[h]["max"]:
+                    job = next_job()
+                    if job is None:
+                        break
+                    outstanding[h] += 1
+                    t = threading.Thread(target=worker, args=(h, *job), daemon=True)
+                    t.start(); threads.append(t); launched = True
+        with lock:
+            busy = sum(outstanding.values())
+        if not launched and busy == 0:
+            break
+        time.sleep(5)
+    for t in threads:
+        t.join()
+    con = db(c)
+    counts = dict(con.execute("select status, count(*) from jobs where stage=? group by status", (stage,)).fetchall())
+    event(c, f"stage-{'stopped' if stop.is_set() else 'done'} {stage}: " +
+          ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    print("finished:", counts)
+
+
+def status(stage=None):
+    c = conf(); con = db(c)
+    q = "select stage, status, count(*), sum(secs) from jobs" + (" where stage=?" if stage else "") + \
+        " group by stage, status order by stage, status"
+    for row in con.execute(q, (stage,) if stage else ()):
+        print(f"{row[0]:10} {row[1]:8} {row[2]:5}  {(row[3] or 0) / 3600:7.1f} build-hours")
+
+
+def failures(stage):
+    c = conf(); con = db(c)
+    for row in con.execute("select source, version, status, host, failstage, signature, log from jobs "
+                           "where stage=? and status not in ('ok','queued','running') order by source", (stage,)):
+        print(" | ".join(str(x) for x in row))
+
+
+if __name__ == "__main__":
+    a = sys.argv[1:]
+    if a[:1] == ["enqueue"] and len(a) == 3: enqueue(a[1], a[2])
+    elif a[:1] == ["run"] and len(a) == 2: run(a[1])
+    elif a[:1] == ["status"]: status(a[1] if len(a) > 1 else None)
+    elif a[:1] == ["failures"] and len(a) == 2: failures(a[1])
+    else: print(__doc__); sys.exit(2)
