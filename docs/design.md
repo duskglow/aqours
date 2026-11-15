@@ -157,12 +157,15 @@ Each failed build or test is classified against its stage-0 baseline:
 | **Package** | Also fails in stage 0 | Recorded and skipped. Fixed only if a higher tier needs it. |
 | **Infrastructure** | Out of space, timeout, flaky mirror | Fixed in Aqours tooling, then retried |
 
-**Patching packages is the last resort.** Liella's goal is glibc compatibility, so the default answer to "this package
-fails on Liella" is to fix Liella. Where a package depends on glibc internals or undocumented behaviour, and
-the two coordinators agree it shouldn't be emulated, Aqours carries a patch. Each patch lives in this
-repository under `packages/<source>/`, with its reason and a link to the Liella issue. Patches are dropped
-as soon as Liella fixes the underlying issue. A deliberate deviation from glibc's documented behaviour is an owner
-decision.
+**Patching packages** (owner, 2026-11-15): Aqours patches packages whenever that's what it takes, without hesitation.
+The rule is that every change is documented here, so it's always clear what Aqours had to change and why. Patches
+aren't sent to Debian or Devuan, unless a bug is egregious.
+
+- **Where:** each patch lives under `packages/<source>/`, with a `README.md` saying what it changes, why, which
+  failure it fixes, and (if any) the Liella issue it relates to.
+- **Liella bugs:** a bug in Liella is still fixed in Liella. A package patch that works around one is a stopgap. It
+  links the issue and is dropped once Liella fixes it.
+- **Deliberate deviations:** departing from glibc's documented behaviour remains an owner decision.
 
 ## 7. What Aqours needs from Liella
 
