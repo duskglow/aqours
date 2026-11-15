@@ -81,11 +81,15 @@ exit 0'
 mkdir -p "$STAGE/checks"; chmod 755 "$STAGE/checks"
 for c in "${CHECKS[@]}"; do cp "$c" "$STAGE/checks/"; done
 chmod 644 "$STAGE"/checks/* 2>/dev/null || true
-keyopts=(--keyring="$KR")
-keyhooks=(--customize-hook="mkdir -p \"\$1/etc/apt/trusted.gpg.d\"" --customize-hook="copy-in $KR /etc/apt/trusted.gpg.d/")
-for k in "${EXTRA_KEYRINGS[@]}"; do
-  keyopts+=(--keyring="$k"); keyhooks+=(--customize-hook="copy-in $k /etc/apt/trusted.gpg.d/")
-done
+# mmdebstrap takes one --keyring (a later one replaces an earlier one), so all
+# trusted keyrings are gathered into one directory, which apt reads as trusted
+# parts, and the same files are installed in the image.
+mkdir -p "$STAGE/keyrings"; chmod 755 "$STAGE/keyrings"
+cp "$KR" "$STAGE/keyrings/"
+for k in "${EXTRA_KEYRINGS[@]}"; do cp "$k" "$STAGE/keyrings/"; done
+chmod 644 "$STAGE"/keyrings/*
+keyopts=(--keyring="$STAGE/keyrings")
+keyhooks=(--customize-hook="mkdir -p \"\$1/etc/apt/trusted.gpg.d\" && cp \"$STAGE\"/keyrings/*.gpg \"\$1/etc/apt/trusted.gpg.d/\"")
 
 mmdebstrap --mode=unshare --variant=minbase --format=null \
   "${keyopts[@]}" \
