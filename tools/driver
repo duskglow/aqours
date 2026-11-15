@@ -258,7 +258,7 @@ def run(stage):
             return None
         rows.sort(key=lambda r: (0 if BIG.match(r[0]) else 1, r[0]))
         src, ver = rows[0]
-        con.execute("update jobs set status='running', started=? where stage=? and source=? and version=?",
+        con.execute("update jobs set status='running', secs=null, failstage=null, signature=null, started=? where stage=? and source=? and version=?",
                     (time.time(), stage, src, ver))
         return src, ver
 
