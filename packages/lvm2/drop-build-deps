@@ -1,4 +1,7 @@
+libcmap-dev
 libcorosync-common-dev
+libcpg-dev
 libdlm-dev
 libdlmcontrol-dev
+libquorum-dev
 libsanlock-dev
