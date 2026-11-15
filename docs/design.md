@@ -163,8 +163,7 @@ compare with stage 2 (`diffoscope`, sampled, then all). Any difference is a nond
 explain. After stage 3, `bootstrap` is deleted, Aqours is self-hosting, and the full pass (documentation, tests,
 features restored, ghc) builds on stage 3's tools.
 
-**Where Snow Halation ships from is an open owner decision.** Recommended: after the stage 3 fixpoint, as a compiler
-would; stage 1 output is never shipped.
+**Snow Halation ships from the stage 3 fixpoint** (decision 18). Stage 1 and stage 2 output is never shipped.
 
 ## 5. Tiers
 
@@ -316,4 +315,5 @@ The owner's decisions, 2026-11-15.
 | 15 | Build documentation and tests during the bootstrap? | **No documentation and no T2 tests until the system works** (owner, 2026-11-15: "There is no point in building docs, etc., if the base system doesn't even work, and it just slows things down."). The bootstrap builds with the `nodoc` profile throughout and adds `nocheck` for T2, the packages needed only to build others. T0 and T1 keep their tests in stage 1, because they are the main signal for Liella bugs; a test failure there is recorded and the package rebuilt with `nocheck`. A full pass with documentation and tests follows once the system rebuilds itself. |
 | 16 | Build optional features during the bootstrap? | **No: the bootstrap is a minimal subset** (owner, 2026-11-15: "A bootstrap is, pretty much by definition, a subset of a full featured build. The goal right now is just to get a minimal build working with Liella."). Packages whose optional features pull in large build-dependency chains (a GUI, Bluetooth, extra compiler front ends, TeX output, Java bindings) are built without them during the bootstrap: through a Debian build profile where the package defines one, or a small documented patch (`packages/<source>/`, `drop-build-deps`). The full pass, once the system rebuilds itself, builds them with their features; Snow Halation ships only full-pass packages. glibc is never built (Liella replaces it). |
 | 17 | How is the bootstrap structured? | **Like making a compiler self-hosting** (owner, 2026-11-15: "That framing does match my intent… it may not be entirely reducible."). Stage 1 builds what ships (T0 + T1) with Devuan's binaries as the host toolchain, running on Liella. Stage 2 uses only Aqours-built packages, so T2 (the build-only tools) is built for it. Stage 3 rebuilds and checks the fixpoint. See section 4. |
+| 18 | Which build of Snow Halation ships? | **The stage 3 fixpoint** (owner, 2026-11-15: "After stage 3 is fine. We want to do this right."). Stage 1 and 2 output never ships. |
 
