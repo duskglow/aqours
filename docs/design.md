@@ -108,27 +108,36 @@ that also happens on glibc is not Liella's. This is the comparison Liella's smok
 also covers testing Liella's reference .debs installed alongside glibc in an excalibur VM, which the owner allowed for
 testing but not as the shipped design.
 
-**Stage 1: build against Liella from a glibc host.** The excalibur chroot still has glibc running the compilers, but
-links against Liella's libraries. This builds the **build-essential closure** (tier 0) and installs it into
-`aqours-bootstrap`.
-- **Method:** reuse Liella's `liella-cc`/`liella-c++` wrappers and the `check-elf.sh` gate from the smoke harness, so
-  the build can't silently fall back to glibc.
+**Stage 1: build with Liella swapped into the build environment** (decision 12). The build chroot (trixie with
+excalibur over it) gets Liella's *system flavour* (`libc6`, `libc-bin`, `libc6-dev`, version `2.39+liella…`)
+installed over glibc's. Every program in it, compilers and apt included, then runs on Liella. Plain `gcc` links against
+Liella, and `dpkg-shlibdeps` records dependencies from Liella's symbols file. This builds the **build-essential
+closure** (tier 0) into the `bootstrap` suite.
+- **Why not the coexistence wrapper:** `liella-gcc` links inside Liella's own sysroot, so every package that links
+  another library would need per-package special handling. The swap needs none, and every build tool that breaks on
+  Liella is a Liella bug found early, which is the point of the exercise.
+- **Blocking bugs are expected and are the point:** each distinct one becomes an issue on duskglow/liella and waits
+  for its fix (the first: libstdc++ refused by the loader, which stops apt).
+- **The gate:** every built ELF object must use Liella's interpreter, may need no `GLIBC_2.40`/`GLIBC_2.41` version
+  node and no `libmvec`, and nothing may be static unless the package is meant to be.
 - **Headers:** until Liella's own headers exist, stage 1 compiles with excalibur's glibc 2.41 headers. Liella keeps
   glibc's struct layouts and constants, so the binaries are what Liella promises to run, but three things leak through:
   - `__GLIBC_MINOR__` reads 41, so a configure check can enable a 2.40/2.41 feature;
   - feature-macro redirects and fortify `__*_chk` functions can bind to 2.40/2.41 symbol versions;
   - vectorised maths can call libmvec, which Liella doesn't have.
 
-  So the gate also refuses any reference to a `GLIBC_2.40`/`GLIBC_2.41` version node or to `libmvec`, and builds
-  disable fortify-level redirects where needed.
+  So the gate refuses any reference to a `GLIBC_2.40`/`GLIBC_2.41` version node or to `libmvec`. The headers come
+  from `aqours-glibc-headers`, a local package built from excalibur's `libc6-dev` (minus what `linux-libc-dev` ships).
+  It lives in the `bootstrap` suite only and is never shipped.
 - **Stage 1 is a throwaway.** Nothing built with glibc's headers ships. Stages 2 and 3 rebuild everything once
   Liella's headers exist. Issues filed from stage 1 describe behaviour (what glibc does, what Liella does) and never
   quote glibc header text, because Liella is a clean-room implementation.
-- **Build profiles:** `nocheck`, plus `stage1` where a source defines it. Tests are skipped here because the host is
-  mixed; they run in stage 2.
-- **Needs from Liella:** items 1–4 of section 7. Liella's planned checkpoint before stage 2 (an excalibur root with
-  Liella swapped in, a scan of every ELF's version needs, and `apt install` of a sample) overlaps with stage 1. The
-  two coordinators decide together who runs it.
+- **Tests:** each package's own build-time tests run, now on Liella, and are compared with the stage 0 baseline. A
+  test failure is recorded as a finding; the package is then built once more with `nocheck`, so the bootstrap can
+  proceed. This is an explicit fallback with the first result kept, not a retry. `stage1` build profiles are used where
+  a source defines them.
+- **Needs from Liella:** items 1–4 of section 7, plus working C++ (`libstdc++`) and, for packages that need root to
+  build, `LD_PRELOAD` (fakeroot). Stage 1 doubles as Liella's planned swap smoke test (SL-SWAP-SMOKE).
 
 **Stage 2: native, glibc-free.** The chroot contains only stage-1 packages and Liella's `libc6` packages, with
 **no glibc**. Its first job is rebuilding tier 0 from source inside itself; that proves self-hosting. Then it builds
@@ -282,4 +291,5 @@ The owner's decisions, 2026-11-15.
 | 9 | Init system | **Devuan's sysvinit**, chosen for having fewer moving parts. Integration with larger distributions may come later as a separate experiment. |
 | 10 | May stage 1 compile with glibc's headers before Liella's own exist? | **Yes, as a throwaway only**, to unblock the short term. Nothing built that way ships; stages 2 and 3 rebuild everything with Liella's headers. |
 | 11 | What environment are packages built in? | **Build like Debian, ship like Devuan.** Devuan publishes Debian's own binaries for about 99.7% of its packages, and Debian built them in a full Debian environment. Rebuilding them in a Devuan-only environment caused failures neither project ever sees (build dependencies on systemd parts, Debian vendor checks). So Aqours builds in Debian trixie with Devuan excalibur layered over it, preferring Devuan's packages, and ships Devuan's selection (sysvinit, eudev, no systemd as init). Not shipping systemd still matters for Liella: its name-service modules need loadable NSS modules, and it is the most glibc-dependent PID 1. |
+| 12 | How does stage 1 build against Liella? | **Swap Liella's system flavour into the build chroot** (owner, 2026-11-15). Every tool then runs on Liella and plain `gcc` links against it. Blocking Liella bugs are expected and are the point of the exercise: "If there's a blocking bug, then there's a blocking bug, and we need to fix it." |
 
