@@ -1,0 +1,21 @@
+Description: Ship /etc/debuginfod/elfutils.urls even when no default server is set
+ debian/rules picks a default debuginfod server only when `lsb_release -is` is
+ Debian or Ubuntu, and only then creates elfutils.urls; but
+ libdebuginfod-common.install always lists it, so on any other distribution
+ (Devuan, Aqours) dh_install aborts. Create the file in any case: it holds the
+ server URL when one is configured, and is empty (no default server) otherwise.
+Author: Aqours Maintainers
+Forwarded: not-needed
+--- a/debian/rules
++++ b/debian/rules
+@@ -119,6 +119,10 @@ install: build
+ 	: # Add here commands to install the package into debian/tmp
+ 	$(MAKE) install DESTDIR=$(CURDIR)/debian/tmp
+
++	: # Aqours: ship the URLs file even without a default server (then it is empty).
++	mkdir -p debian/tmp/etc/debuginfod
++	touch debian/tmp/etc/debuginfod/elfutils.urls
++
+ 	: # We do not provide a libebl anymore, use libdw instead.
+ 	rm -f debian/tmp/usr/include/elfutils/libebl.h
+

@@ -10,6 +10,7 @@
 # Stage "stage0" is the glibc reference rebuild: architecture-dependent
 # binaries only (Architecture: all is imported, not rebuilt), with the
 # package's own build-time tests on. Nothing from stage0 is published.
+# Stage "stage0p" is the same with Aqours's patches applied (packages/<source>/).
 # Needs ~/aqours/env (AQOURS_CHROOT, AQOURS_SCRATCH, AQOURS_LOGS, SBUILD_CONFIG, ...).
 set -uo pipefail
 STAGE=${1:?usage: buildone STAGE SOURCE VERSION}; SRC=${2:?}; VER=${3:?}
@@ -46,9 +47,47 @@ rm -f "$logdir/${SRC}_${VER}.result"
 cd "$work" || exit 1
 
 case "$STAGE" in
-  stage0) opts=(--no-arch-all --arch-any); dbo="noautodbgsym";;
+  stage0)  opts=(--no-arch-all --arch-any); dbo="noautodbgsym"; patches=no;;   # pure baseline: Devuan as is
+  stage0p) opts=(--no-arch-all --arch-any); dbo="noautodbgsym"; patches=yes;;  # baseline + Aqours patches (glibc)
   *) echo "RESULT error 0 - unknown-stage"; exit 2;;
 esac
+
+# Aqours patches: packages/<source>/patches/*.patch from the Aqours repository,
+# applied in name order to the verified Devuan source. The result is rebuilt as
+# a new source package with version <version>aqours<N> (N from
+# packages/<source>/revision, default 1), and that is what sbuild builds.
+target="${SRC}_${VER}"
+pkgdir="${AQOURS_PACKAGES:-}/$SRC"
+if [ "$patches" = yes ] && [ -n "${AQOURS_PACKAGES:-}" ] && ls "$pkgdir"/patches/*.patch >/dev/null 2>&1; then
+  prep="$logdir/${SRC}_${VER}.prep.log"
+  rev=$(cat "$pkgdir/revision" 2>/dev/null || echo 1)
+  newver="${VER}aqours${rev}"
+  (
+    set -e
+    echo "== getsource $SRC $VER"
+    dsc=$(python3 -I "$HOME/aqours/tools/getsource" "$SRC" "$VER" "$work/src")
+    cd "$work/src"
+    dpkg-source --no-check -x "$dsc" tree      # the .dsc's files were verified by getsource
+    for p in "$pkgdir"/patches/*.patch; do
+      echo "== apply $(basename "$p")"
+      patch -p1 -d tree --no-backup-if-mismatch < "$p"
+    done
+    (cd tree && DEBEMAIL="aqours@koiren.ai" DEBFULLNAME="Aqours Maintainers" \
+      dch --newversion "$newver" --distribution excalibur --force-distribution \
+          "Aqours: apply packages/$SRC patches: $(cd "$pkgdir/patches" && ls *.patch | tr '\n' ' ')")
+    dpkg-source --auto-commit -b tree
+  ) > "$prep" 2>&1
+  prc=$?
+  target="$work/src/${SRC}_${newver#*:}.dsc"
+  if [ $prc -ne 0 ] || [ ! -f "$target" ]; then
+    zstd -q -f "$prep" -o "$prep.zst" && rm -f "$prep"
+    cd /; rm -rf "$work"
+    line="RESULT fail 0 aqours-patch $prep.zst"
+    echo "$line" > "$logdir/${SRC}_${VER}.result"; echo "$line"; exit 0
+  fi
+  zstd -q -f "$prep" -o "$prep.zst" && rm -f "$prep"   # keep the record of what was applied
+  cd "$work"
+fi
 jobs=${AQOURS_JOBS:-8}
 case "$SIZE" in S) jobs=$(( (jobs + 1) / 2 ));; L) jobs=$((jobs * 2));; esac
 export DEB_BUILD_OPTIONS="parallel=$jobs $dbo"
@@ -65,7 +104,7 @@ backstop_h=${AQOURS_BUILD_BACKSTOP_H:-8}
 export SLOT_PIN_BIN=/bin/true
 SLOT_MAX_MIN=$(( backstop_h * 60 + 15 )) SLOT_SIZE=$SIZE "$HOME/bin/slots" 1 "aqours:$STAGE:$SRC" \
   timeout --kill-after=5m "${backstop_h}h" \
-  sbuild --chroot="$AQOURS_CHROOT" --dist=excalibur "${opts[@]}" "${SRC}_${VER}" >/dev/null 2>&1
+  sbuild --chroot="$AQOURS_CHROOT" --dist=excalibur "${opts[@]}" "$target" >/dev/null 2>&1
 rc=$?
 secs=$((SECONDS - start))
 

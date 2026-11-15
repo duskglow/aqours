@@ -1,0 +1,82 @@
+#!/usr/bin/python3 -I
+"""getsource: download one source package from the mirror and verify it.
+
+    tools/getsource SOURCE VERSION OUTDIR
+
+Needs AQOURS_MIRROR (Devuan mirror base URL) and AQOURS_KEYRINGS. Searches
+excalibur, excalibur-updates and excalibur-security. The chain of trust is
+checked end to end: the suite's InRelease is verified with gpgv against the
+pinned Devuan keyring, the Sources index against InRelease's SHA256, and each
+file of the source package against the Sources entry's SHA256. Nothing is
+trusted on transport alone. Prints the path of the .dsc on success.
+"""
+import hashlib, lzma, os, re, subprocess, sys, tempfile, urllib.request
+
+SUITES = ["excalibur", "excalibur-updates", "excalibur-security"]
+
+
+def die(msg):
+    print("getsource: " + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def fetch(url):
+    with urllib.request.urlopen(url, timeout=120) as r:
+        return r.read()
+
+
+def stanzas(text):
+    for block in text.split("\n\n"):
+        st, last = {}, None
+        for line in block.splitlines():
+            if line[:1] in (" ", "\t") and last:
+                st[last] += "\n" + line.strip()
+            elif ":" in line:
+                k, _, v = line.partition(":")
+                last = k; st[k] = v.strip()
+        if st:
+            yield st
+
+
+def main():
+    if len(sys.argv) != 4:
+        die("usage: getsource SOURCE VERSION OUTDIR")
+    src, ver, outdir = sys.argv[1:]
+    mirror = (os.environ.get("AQOURS_MIRROR") or die("set AQOURS_MIRROR")).rstrip("/")
+    keyring = os.path.join(os.environ.get("AQOURS_KEYRINGS") or die("set AQOURS_KEYRINGS"),
+                           "devuan-archive-keyring.gpg")
+    os.makedirs(outdir, exist_ok=True)
+    for suite in SUITES:
+        inrel = fetch(f"{mirror}/dists/{suite}/InRelease")
+        with tempfile.NamedTemporaryFile(suffix=".InRelease") as f:
+            f.write(inrel); f.flush()
+            v = subprocess.run(["gpgv", "--keyring", keyring, "--output", "-", f.name], capture_output=True)
+        if v.returncode != 0:
+            die(f"{suite}: InRelease signature does not verify:\n{v.stderr.decode()[-500:]}")
+        signed = v.stdout.decode()
+        m = re.search(r"^ ([0-9a-f]{64})\s+\d+\s+main/source/Sources\.xz$", signed, re.M)
+        if not m:
+            die(f"{suite}: no SHA256 for main/source/Sources.xz in InRelease")
+        raw = fetch(f"{mirror}/dists/{suite}/main/source/Sources.xz")
+        if hashlib.sha256(raw).hexdigest() != m.group(1):
+            die(f"{suite}: Sources.xz does not match InRelease")
+        for st in stanzas(lzma.decompress(raw).decode("utf-8", "replace")):
+            if st.get("Package") != src or st.get("Version") != ver:
+                continue
+            files = [l.split() for l in st.get("Checksums-Sha256", "").splitlines() if l.strip()]
+            dsc = None
+            for sha, size, name in files:
+                data = fetch(f"{mirror}/{st['Directory']}/{name}")
+                if hashlib.sha256(data).hexdigest() != sha or len(data) != int(size):
+                    die(f"{name}: checksum or size mismatch")
+                with open(os.path.join(outdir, name), "wb") as f:
+                    f.write(data)
+                if name.endswith(".dsc"):
+                    dsc = os.path.join(outdir, name)
+            print(dsc)
+            return
+    die(f"{src} {ver} not found in {', '.join(SUITES)}")
+
+
+if __name__ == "__main__":
+    main()
