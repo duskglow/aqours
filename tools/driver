@@ -13,7 +13,9 @@ Settings come from ~/aqours/driver.conf (JSON):
    "publish": {"stage1": "bootstrap"}, "incoming": "...", "reprepro": "...", "gnupghome": "..."}
 A stage listed under "publish" has its successful builds (status ok, or oknc:
 built but its tests failed) included into that suite from the incoming
-directory, signed on this host.
+directory, signed on this host. With "ledger": {"tool", "repo", "as"}, every
+host is checked against the shared resource ledger before a build is started
+there; during a maintenance window it gets no new builds.
 
 Operating rules (learned by Liella, adopted by Aqours):
   - No retries: a failure is a result, recorded once. Requeue by hand after a fix.
@@ -169,6 +171,37 @@ def acknowledged(sig):
     return False
 
 
+_ledger_cache = {}
+
+
+def host_available(c, h):
+    """Ask the shared resource ledger whether this project may use host h now.
+
+    Configured by conf "ledger": {"tool": ".../resource.py", "repo": "...", "as": "<project>"}.
+    The owner's maintenance windows override every claim, so a host in maintenance
+    (or no longer ours) gets no new builds; running builds are not touched. The
+    answer is cached for 60 s. If the check itself fails, the host is treated as
+    unavailable, so a broken check can never let builds run through a window."""
+    led = c.get("ledger")
+    if not led:
+        return True
+    now = time.time()
+    hit = _ledger_cache.get(h)
+    if hit and now - hit[0] < 60:
+        return hit[1]
+    try:
+        p = subprocess.run(["python3", "-I", led["tool"], "check", h, "--as", led["as"]],
+                           cwd=led["repo"], capture_output=True, text=True, timeout=120)
+        ok, why = p.returncode == 0, (p.stdout + p.stderr).strip().splitlines()[-1:] or ["?"]
+    except Exception as e:
+        ok, why = False, [f"check failed: {e}"]
+    prev = hit[1] if hit else True
+    _ledger_cache[h] = (now, ok)
+    if prev != ok:
+        event(c, f"host-{'available' if ok else 'unavailable'} {h}: ledger says: {why[0][:160]}")
+    return ok
+
+
 def stop_requested(stage):
     d = os.path.dirname(conf()["db"])
     return os.path.exists(os.path.join(d, "STOP")) or os.path.exists(os.path.join(d, "STOP-" + stage))
@@ -259,7 +292,7 @@ def run(stage):
         launched = False
         with lock:
             for h in hosts:
-                if outstanding[h] < hosts[h]["max"]:
+                if outstanding[h] < hosts[h]["max"] and host_available(c, h):
                     job = next_job()
                     if job is None:
                         break
