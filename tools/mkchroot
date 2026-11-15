@@ -1,0 +1,55 @@
+#!/bin/bash
+# mkchroot: build an sbuild chroot tarball for Devuan excalibur, unprivileged.
+#
+#   tools/mkchroot [--mirror URL] [--keyrings DIR] [--suite SUITE] OUTPUT.tar.zst
+#
+# Uses mmdebstrap --mode=unshare (no root). The mirror is trusted only through
+# its signed InRelease, checked against the pinned keyrings in --keyrings DIR;
+# never [trusted=yes]. The keyrings are also installed in the chroot so that
+# apt inside it checks the same signatures.
+set -euo pipefail
+
+MIRROR=${AQOURS_MIRROR:-}
+# The keyrings must be readable by the unshare namespace's mapped root, which
+# can't enter a mode-750 home directory, so keep them outside $HOME.
+KEYRINGS=${AQOURS_KEYRINGS:-}
+SUITE=excalibur
+while [ $# -gt 1 ]; do
+  case "$1" in
+    --mirror) MIRROR=$2; shift 2;;
+    --keyrings) KEYRINGS=$2; shift 2;;
+    --suite) SUITE=$2; shift 2;;
+    *) echo "unknown option: $1" >&2; exit 2;;
+  esac
+done
+OUT=${1:?usage: mkchroot [--mirror URL] [--keyrings DIR] [--suite SUITE] OUTPUT.tar.zst}
+[ -n "$MIRROR" ] || { echo "mkchroot: set --mirror or AQOURS_MIRROR (the Devuan mirror base URL)" >&2; exit 2; }
+[ -n "$KEYRINGS" ] || { echo "mkchroot: set --keyrings or AQOURS_KEYRINGS (directory of pinned archive keyrings)" >&2; exit 2; }
+KR="$KEYRINGS/devuan-archive-keyring.gpg"
+[ -r "$KR" ] || { echo "mkchroot: missing $KR" >&2; exit 2; }
+
+SOURCES="deb $MIRROR $SUITE main
+deb $MIRROR $SUITE-updates main
+deb $MIRROR $SUITE-security main
+deb-src $MIRROR $SUITE main
+deb-src $MIRROR $SUITE-updates main
+deb-src $MIRROR $SUITE-security main"
+
+case "$OUT" in *.tar.zst) ;; *) echo "mkchroot: OUTPUT must end in .tar.zst" >&2; exit 2;; esac
+mkdir -p "$(dirname "$OUT")"
+tmp="${OUT%.tar.zst}.tmp$$.tar.zst"
+trap 'rm -f "$tmp"' EXIT
+
+# Sources come on stdin (the "-" mirror argument); the output format follows
+# from the file extension.
+mmdebstrap --mode=unshare --variant=buildd \
+  --keyring="$KR" \
+  --include=ca-certificates \
+  --customize-hook="mkdir -p \"\$1/etc/apt/trusted.gpg.d\"" \
+  --customize-hook="copy-in $KR /etc/apt/trusted.gpg.d/" \
+  --customize-hook='rm -f "$1"/var/cache/apt/*.bin; rm -rf "$1"/var/lib/apt/lists/*' \
+  "$SUITE" "$tmp" - <<<"$SOURCES"
+
+mv -f "$tmp" "$OUT"
+trap - EXIT
+echo "mkchroot: wrote $OUT ($(du -h "$OUT" | cut -f1))"

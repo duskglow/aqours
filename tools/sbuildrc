@@ -1,0 +1,20 @@
+# Aqours sbuild configuration. Used through SBUILD_CONFIG so it never touches
+# a shared ~/.sbuildrc. Builds are unprivileged (unshare mode); the build tree
+# lives in RAM scratch and is removed when the build ends.
+$chroot_mode = 'unshare';
+$distribution = 'excalibur';
+die "sbuildrc: set AQOURS_SCRATCH (directory for build trees)\n" unless $ENV{AQOURS_SCRATCH};
+$unshare_tmpdir_template = $ENV{AQOURS_SCRATCH} . '/sbuild.XXXXXXXXXX';
+$build_dir = $ENV{AQOURS_OUT} // '.';
+$run_lintian = 0;
+$run_piuparts = 0;
+$run_autopkgtest = 0;
+$apt_update = 1;
+$apt_distupgrade = 0;
+$purge_build_directory = 'always';
+# Aqours's pool starts empty, so every upload carries its upstream tarball.
+$force_orig_source = 1;
+$build_environment = {
+  'DEB_BUILD_OPTIONS' => $ENV{DEB_BUILD_OPTIONS} // 'parallel=' . ($ENV{AQOURS_JOBS} // 8),
+};
+1;

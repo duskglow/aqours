@@ -1,0 +1,51 @@
+#!/bin/bash
+# boottest: boot an image made by tools/mkimage in KVM and check its marker.
+#
+#   tools/boottest IMAGEDIR [LOG]
+#
+# Boots IMAGEDIR/{vmlinuz,initrd.img,root.ext4} with a serial console; the image
+# is opened read-only with a throwaway overlay (snapshot=on), so it is never
+# modified.
+#
+# PASS: the console shows "AQOURS-BOOTTEST: OK" and the VM powers itself off.
+# FAIL, as soon as it is seen: a kernel panic, an init or fsck failure that drops
+# to a maintenance shell, a dracut/initramfs emergency shell, or the VM exiting
+# without the marker. The timeout is only a backstop against a silent hang; it
+# never decides a pass.
+set -uo pipefail
+DIR=${1:?usage: boottest IMAGEDIR [LOG]}
+LOG=${2:-$DIR/boot.log}
+TIMEOUT=${AQOURS_BOOT_TIMEOUT:-600}
+FAILRE='Kernel panic|end Kernel panic|maintenance shell|Give root password for maintenance|ALERT! .* does not exist|Dropping to a shell|/bin/sh: can.t access tty|Run /init as init process.*failed|No working init found'
+
+# Never judge a previous run's console output.
+rm -f "$LOG" "$LOG.qemu"; : > "$LOG"
+
+qemu-system-x86_64 \
+  -enable-kvm -cpu host -smp 2 -m 2048 -display none -serial "file:$LOG" -monitor none -no-reboot \
+  -kernel "$DIR/vmlinuz" -initrd "$DIR/initrd.img" \
+  -append "root=/dev/vda rw console=ttyS0 aqours.boottest=poweroff panic=-1" \
+  -drive "file=$DIR/root.ext4,format=raw,if=virtio,snapshot=on" \
+  -nic none </dev/null >"$LOG.qemu" 2>&1 &
+qpid=$!
+
+verdict=""; start=$SECONDS
+while kill -0 $qpid 2>/dev/null; do
+  if grep -aEq "$FAILRE" "$LOG" 2>/dev/null; then
+    verdict="FAIL ($(grep -aEo "$FAILRE" "$LOG" | head -1))"; kill $qpid; break
+  fi
+  if [ $((SECONDS - start)) -ge "$TIMEOUT" ]; then
+    verdict="FAIL (no marker and no power-off within ${TIMEOUT}s)"; kill $qpid; break
+  fi
+  sleep 2
+done
+wait $qpid; rc=$?
+
+marker=$(grep -a 'AQOURS-BOOTTEST: OK' "$LOG" | tail -1 | tr -d '\r')
+if [ -z "$verdict" ]; then
+  if [ -z "$marker" ]; then verdict="FAIL (VM exited, qemu status $rc, without the marker)"
+  elif [ $rc -ne 0 ]; then verdict="FAIL (marker seen, but qemu exited with $rc)"
+  else verdict="PASS ($marker)"; fi
+fi
+echo "boottest: $verdict  [$((SECONDS - start))s, log $LOG]"
+case "$verdict" in PASS*) exit 0;; *) tail -5 "$LOG" | tr -d '\r' | cut -c1-200; exit 1;; esac

@@ -1,0 +1,86 @@
+#!/bin/bash
+# mkimage: build a bootable test image (ext4 root, plus the kernel and initrd
+# beside it for direct boot), unprivileged.
+#
+#   tools/mkimage --mirror URL [--suite SUITE] [--keyrings DIR] OUTDIR
+#
+# OUTDIR gets root.ext4, vmlinuz and initrd.img. The image boots sysvinit with
+# a serial console. A boot-test init script (rc2.d, last) prints
+#   AQOURS-BOOTTEST: OK <uname -r> runlevel=<n> libc=<libc.so.6 target>
+# on the console and powers off, so tools/boottest has a deterministic signal.
+#
+# mke2fs -d runs inside mmdebstrap's user namespace, where the root tree's
+# files are owned by root, so the image's ownership is right without real root.
+# During hooks mmdebstrap bind-mounts the host's /dev, /dev/shm, /proc and /sys
+# into the tree, so the tree is first copied with tar --one-file-system (which
+# skips every mount) and mke2fs reads the copy. /dev is left empty: device
+# nodes can't be made in a user namespace, and the booted kernel's devtmpfs
+# and eudev provide them.
+set -euo pipefail
+
+MIRROR=${AQOURS_MIRROR:-}
+KEYRINGS=${AQOURS_KEYRINGS:-}
+SUITE=excalibur
+EXTRA_SOURCES=""
+INCLUDE="init,sysvinit-core,eudev,kmod,e2fsprogs,linux-image-amd64,initramfs-tools,procps,iproute2"
+while [ $# -gt 1 ]; do
+  case "$1" in
+    --mirror) MIRROR=$2; shift 2;;
+    --suite) SUITE=$2; shift 2;;
+    --keyrings) KEYRINGS=$2; shift 2;;
+    --source) EXTRA_SOURCES+="$2"$'\n'; shift 2;;   # an extra full sources line
+    --include) INCLUDE+=",$2"; shift 2;;
+    *) echo "unknown option: $1" >&2; exit 2;;
+  esac
+done
+OUTDIR=${1:?usage: mkimage --mirror URL [--suite S] [--source LINE] [--include PKGS] OUTDIR}
+[ -n "$MIRROR" ] || { echo "mkimage: set --mirror or AQOURS_MIRROR" >&2; exit 2; }
+[ -n "$KEYRINGS" ] || { echo "mkimage: set --keyrings or AQOURS_KEYRINGS" >&2; exit 2; }
+KR="$KEYRINGS/devuan-archive-keyring.gpg"
+
+mkdir -p "$OUTDIR"
+OUTDIR=$(cd "$OUTDIR" && pwd)
+# The namespace's mapped root writes the outputs into a world-writable staging
+# directory; we move them into OUTDIR afterwards.
+STAGE=$(mktemp -d "$OUTDIR/.stage.XXXXXX")
+chmod 1777 "$STAGE"
+trap 'rm -rf "$STAGE"' EXIT
+
+SOURCES="deb $MIRROR $SUITE main
+deb $MIRROR $SUITE-updates main
+deb $MIRROR $SUITE-security main
+$EXTRA_SOURCES"
+
+BOOTTEST='#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          aqours-boottest
+# Required-Start:    $all
+# Required-Stop:
+# Default-Start:     2 3 4 5
+# Default-Stop:
+# Short-Description: Aqours boot test marker
+### END INIT INFO
+case "$1" in start)
+  rl=$(runlevel | cut -d" " -f2)
+  libc=$(readlink -f /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null || echo none)
+  echo "AQOURS-BOOTTEST: OK $(uname -r) runlevel=$rl libc=$libc" > /dev/ttyS0
+  if grep -qw aqours.boottest=poweroff /proc/cmdline; then poweroff; fi;;
+esac
+exit 0'
+
+mmdebstrap --mode=unshare --variant=minbase --format=null \
+  --keyring="$KR" \
+  --include="$INCLUDE" \
+  --customize-hook="mkdir -p \"\$1/etc/apt/trusted.gpg.d\"" \
+  --customize-hook="copy-in $KR /etc/apt/trusted.gpg.d/" \
+  --customize-hook="printf '%s\n' '$BOOTTEST' > \"\$1/etc/init.d/aqours-boottest\" && chmod 755 \"\$1/etc/init.d/aqours-boottest\"" \
+  --customize-hook='chroot "$1" update-rc.d aqours-boottest defaults >/dev/null' \
+  --customize-hook='echo "T0:23:respawn:/sbin/getty -L ttyS0 115200 vt100" >> "$1/etc/inittab"' \
+  --customize-hook='echo "/dev/vda / ext4 errors=remount-ro 0 1" > "$1/etc/fstab"; echo aqours-test > "$1/etc/hostname"' \
+  --customize-hook='rm -f "$1"/var/cache/apt/*.bin; rm -rf "$1"/var/lib/apt/lists/*' \
+  --customize-hook="cp -L \"\$1\"/vmlinuz \"$STAGE/vmlinuz\" && cp -L \"\$1\"/initrd.img \"$STAGE/initrd.img\"" \
+  --customize-hook="{ mkdir \"$STAGE/tree\" && tar -C \"\$1\" --one-file-system --exclude=./dev/* -cf - . | tar -C \"$STAGE/tree\" -xpf - && sz=\$(du -sm \"$STAGE/tree\" | cut -f1) && mke2fs -q -t ext4 -L aqours-root -d \"$STAGE/tree\" \"$STAGE/root.ext4\" \$(( sz * 13 / 10 + 256 ))M; } 2>\"$STAGE/hook.log\"; rc=\$?; rm -rf \"$STAGE/tree\"; exit \$rc" \
+  "$SUITE" /dev/null - <<<"$SOURCES" || { echo "mkimage: mmdebstrap failed; image hook said:" >&2; cat "$STAGE/hook.log" >&2 2>/dev/null; exit 1; }
+
+for f in root.ext4 vmlinuz initrd.img; do mv -f "$STAGE/$f" "$OUTDIR/$f"; done
+echo "mkimage: wrote $OUTDIR (root.ext4 $(du -h "$OUTDIR/root.ext4" | cut -f1))"
