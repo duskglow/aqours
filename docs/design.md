@@ -19,6 +19,11 @@ with the date each was made.
 - Rebuilds that are reproducible and attributable: each failure is classified as Liella's, Aqours's infrastructure's,
   or the package's own.
 
+**Principle** (owner, 2026-11-15): *Aqours builds on Devuan; it doesn't port Devuan.* Whatever it takes to make Liella
+Aqours's own C library, or to make packages work with it, is done the Aqours way. There's no effort to stay
+compatible with Devuan beyond what's useful. Every change is recorded as a patch under `packages/`, so it can be
+carried forward when Devuan updates a package.
+
 **Fixed by earlier rulings**
 - **Route A.** Devuan provides the source and the policy, not the binaries. Everything that links libc is rebuilt
   from excalibur source against Liella. Liella's binary packages take glibc's names (`libc6`, `libc-bin`,
