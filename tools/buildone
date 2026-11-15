@@ -72,6 +72,10 @@ secs=$((SECONDS - start))
 log=$(ls -t "$work"/*.build 2>/dev/null | grep -v '_amd64.build$' | head -1)
 [ -n "$log" ] || log=$(ls -t "$work"/*.build 2>/dev/null | head -1)
 failstage=$(grep -a -m1 '^Fail-Stage:' "$log" 2>/dev/null | awk '{print $2}')
+# Report sbuild's own job time (Package-Time) rather than wall time, which
+# also counts waiting in the slots queue. Fall back to wall time with no log.
+ptime=$(grep -a -m1 '^Package-Time:' "$log" 2>/dev/null | awk '{print $2}')
+[ -n "$ptime" ] && secs=$ptime
 status=$(grep -a -m1 '^Status:' "$log" 2>/dev/null | awk '{print $2}')
 dest="$logdir/${SRC}_${VER}.log.zst"
 [ -n "$log" ] && zstd -q -f -19 "$log" -o "$dest"
