@@ -27,6 +27,10 @@ Operating rules (learned by Liella, adopted by Aqours):
 import json, os, re, sqlite3, subprocess, sys, threading, time
 
 CONF = os.path.expanduser(os.environ.get("AQOURS_DRIVER_CONF", "~/aqours/driver.conf"))
+# The job status this driver dispatches from. Normally "queued"; a different
+# value lets a new driver take over a queue while an older one still finishes
+# its own builds (the older one only ever looks at "queued").
+QSTATUS = os.environ.get("AQOURS_QUEUE_STATUS", "queued")
 BIG = re.compile(r"^(gcc-1\d|glibc|llvm-toolchain-.*|rustc|rust-.*|linux|binutils|systemd|perl|python3\.1\d|"
                  r"openssl|util-linux|gnutls28|krb5|bind9|vim|grub2|elfutils|gnupg2|apparmor|exim4|openssh)$")
 SYSTEMIC = 3
@@ -133,8 +137,8 @@ def run(stage):
                 if out.startswith("RESULT"):
                     record(c, con, stage, h, src, ver, out, stop); return
                 if out == "GONE":
-                    con.execute("update jobs set status='queued', host=null, started=null where stage=? and source=? "
-                                "and version=?", (stage, src, ver))
+                    con.execute("update jobs set status=?, host=null, started=null where stage=? and source=? "
+                                "and version=?", (QSTATUS, stage, src, ver))
                     event(c, f"lost-build {stage}: {src} {ver} on {h} ended without a result; requeued")
                     return
                 time.sleep(60)
@@ -153,7 +157,7 @@ def run(stage):
 
     def next_job():
         con = db(c)
-        rows = con.execute("select source, version from jobs where stage=? and status='queued'", (stage,)).fetchall()
+        rows = con.execute("select source, version from jobs where stage=? and status=?", (stage, QSTATUS)).fetchall()
         if not rows:
             return None
         rows.sort(key=lambda r: (0 if BIG.match(r[0]) else 1, r[0]))
