@@ -96,6 +96,14 @@ fi
 jobs=${AQOURS_JOBS:-8}
 case "$SIZE" in S) jobs=$(( (jobs + 1) / 2 ));; L) jobs=$((jobs * 2));; esac
 export DEB_BUILD_OPTIONS="parallel=$jobs $dbo"
+# Build profiles Aqours declares for this source (packages/<source>/build-profiles,
+# e.g. nodoc; decision 14), from stage0p on. The pure stage 0 baseline uses none.
+if [ "$patches" = yes ] && [ -s "$pkgdir/build-profiles" ]; then
+  profiles=$(tr -s ' \n' ',' < "$pkgdir/build-profiles" | sed 's/,$//')
+  opts+=(--profiles="$profiles")
+  export DEB_BUILD_PROFILES="${profiles//,/ }"
+  case " $DEB_BUILD_PROFILES " in *" nodoc "*) DEB_BUILD_OPTIONS="$DEB_BUILD_OPTIONS nodoc";; esac
+fi
 # slots caps a shared job's run time (SLOT_MAX_MIN, default 150 minutes), and
 # gcc or binutils with their test suites run longer. Our own backstop below is
 # the only time limit, so lift the queue's cap just above it.

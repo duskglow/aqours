@@ -11,8 +11,10 @@ apt configuration, signatures checked against the pinned keyrings).
 
 Iterates to a fixpoint: every source whose architecture-dependent binaries are
 needed to build a source in the set joins the set, and its build dependencies
-are resolved in turn. Architecture: all binaries are imported, not rebuilt
-(decision 1), so they don't pull their sources in.
+are resolved in turn. Architecture: all binaries (decision 1) and binaries
+with no ELF objects at all (decision 13; checked by downloading each package
+once, verified against the signed index, cached in OUTDIR/elf-cache.tsv) are
+imported, not rebuilt, so they don't pull their sources in.
 
 Writes OUTDIR/NAME.rebuild (sources added beyond SOURCES-FILE, "source version
 origin"), OUTDIR/NAME.import (Architecture: all binaries needed), and
@@ -22,7 +24,7 @@ NAME defaults to T2.
 Needs AQOURS_MIRROR, AQOURS_DEBIAN_MIRROR, AQOURS_DEBIAN_SECURITY_MIRROR and
 AQOURS_KEYRINGS.
 """
-import os, re, subprocess, sys, tempfile
+import concurrent.futures, hashlib, os, re, subprocess, sys, tarfile, tempfile, threading, urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -93,43 +95,116 @@ def main():
         if r.returncode:
             die("apt-get update failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
 
-        # (binary, version) -> (source, source version, arch, origin)
+        # (binary, version) -> (source, source version, arch, origin, url, sha256)
         lists = os.path.join(root, "var/lib/apt/lists")
         bins = {}
         for fn in sorted(os.listdir(lists)):
             if not fn.endswith("_Packages"):
                 continue
-            origin = "devuan" if "devuan" in fn else "debian"
+            if "_devuan_" in fn:
+                origin, base = "devuan", mirror
+            elif "debian-security" in fn:
+                origin, base = "debian", debsec
+            else:
+                origin, base = "debian", deb
             for st in read_stanzas(os.path.join(lists, fn)):
                 n, v = st["Package"], st["Version"]
                 m = re.match(r"^(\S+)(?:\s+\((.+)\))?$", st.get("Source", n))
-                bins[(n, v)] = (m.group(1), m.group(2) or v, st.get("Architecture", ""), origin)
+                bins[(n, v)] = (m.group(1), m.group(2) or v, st.get("Architecture", ""), origin,
+                                base.rstrip("/") + "/" + st.get("Filename", ""), st.get("SHA256", ""))
+
+        # Decision 13: a binary package with no ELF objects is imported, whatever its
+        # architecture. Each package is downloaded once (checked against the signed
+        # index's SHA256) and the answer cached in OUTDIR/elf-cache.tsv.
+        cache_path = os.path.join(outdir, "elf-cache.tsv")
+        elf_cache = {}
+        if os.path.exists(cache_path):
+            for line in open(cache_path):
+                p = line.split()
+                if len(p) == 3:
+                    elf_cache[(p[0], p[1])] = p[2] == "elf"
+        cache_lock = threading.Lock()
+
+        def has_elf(n, v):
+            with cache_lock:
+                if (n, v) in elf_cache:
+                    return elf_cache[(n, v)]
+            url, sha = bins[(n, v)][4], bins[(n, v)][5]
+            with tempfile.NamedTemporaryFile(suffix=".deb", dir=root) as tmp:
+                with urllib.request.urlopen(url, timeout=300) as r:
+                    data = r.read()
+                if sha and hashlib.sha256(data).hexdigest() != sha:
+                    die(f"{n} {v}: download does not match the index's SHA256")
+                tmp.write(data); tmp.flush()
+                p = subprocess.Popen(["dpkg-deb", "--fsys-tarfile", tmp.name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                found = False
+                with tarfile.open(fileobj=p.stdout, mode="r|*") as tf:
+                    for mem in tf:
+                        if mem.isfile() and mem.size >= 4:
+                            if tf.extractfile(mem).read(4) == b"\x7fELF":
+                                found = True
+                                break
+                p.stdout.close(); p.wait()
+            with cache_lock:
+                elf_cache[(n, v)] = found
+                with open(cache_path, "a") as f:
+                    f.write(f"{n} {v} {'elf' if found else 'noelf'}\n")
+            return found
+
+        # Aqours's per-source declarations (packages/<source>/): build-profiles is
+        # the profiles Aqours builds the source with (e.g. nodoc); drop-build-deps
+        # lists binary build dependencies that the source's Aqours patch removes
+        # (decision 14: e.g. pandoc), so they are left out of the closure here.
+        pkgroot = os.environ.get("AQOURS_PACKAGES", "")
+
+        def declared(src, what):
+            try:
+                return open(os.path.join(pkgroot, src, what)).read().split() if pkgroot else []
+            except OSError:
+                return []
+
+        def resolve(src):
+            cmd = ["apt-get", "build-dep", "-s", "-q", "--arch-only"]
+            profiles = declared(src, "build-profiles")
+            if profiles:
+                cmd += ["-P", ",".join(profiles)]
+            r = subprocess.run(cmd + [src], env=env, capture_output=True, text=True)
+            return src, r
 
         have = dict(start)          # sources in the set
         added = {}                  # source -> (version, origin) beyond the start set
         imports, unresolved = set(), {}
+        noelf = set()               # architecture-dependent binaries imported under decision 13
         todo = sorted(start)
         rounds = 0
-        while todo:
-            rounds += 1
-            nxt = []
-            for src in todo:
-                r = subprocess.run(["apt-get", "build-dep", "-s", "-q", "--arch-only", src],
-                                   env=env, capture_output=True, text=True)
-                if r.returncode:
-                    unresolved[src] = (r.stdout + r.stderr).strip().splitlines()[-1][:200] if (r.stdout + r.stderr).strip() else "?"
-                    continue
-                for n, v in re.findall(r"^Inst (\S+) \((\S+)", r.stdout, re.M):
-                    info = bins.get((n, v))
-                    if not info:
+        jobs = int(os.environ.get("AQOURS_BUILDDEPS_JOBS", "8"))
+        with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
+            while todo:
+                rounds += 1
+                nxt = []
+                for src, r in pool.map(resolve, todo):
+                    if r.returncode:
+                        out = (r.stdout + r.stderr).strip()
+                        unresolved[src] = out.splitlines()[-1][:200] if out else "?"
                         continue
-                    s, sv, arch, origin = info
-                    if arch == "all":
-                        imports.add((n, v)); continue
-                    if s not in have:
-                        have[s] = sv; added[s] = (sv, origin); nxt.append(s)
-            todo = sorted(set(nxt))
-            print(f"round {rounds}: +{len(todo)} sources (total added {len(added)})", flush=True)
+                    cands = []
+                    dropped = set(declared(src, "drop-build-deps"))
+                    for n, v in re.findall(r"^Inst (\S+) \((\S+)", r.stdout, re.M):
+                        info = bins.get((n, v))
+                        if not info or n in dropped:
+                            continue
+                        if info[2] == "all":
+                            imports.add((n, v)); continue
+                        cands.append((n, v))
+                    for (n, v), elf in zip(cands, pool.map(lambda nv: has_elf(*nv), cands)):
+                        if not elf:
+                            noelf.add((n, v)); imports.add((n, v)); continue
+                        s, sv, _, origin = bins[(n, v)][:4]
+                        if s not in have:
+                            have[s] = sv; added[s] = (sv, origin); nxt.append(s)
+                todo = sorted(set(nxt))
+                print(f"round {rounds}: +{len(todo)} sources (total added {len(added)}, "
+                      f"{len(noelf)} ELF-free binaries imported)", flush=True)
 
         with open(os.path.join(outdir, name + ".rebuild"), "w") as f:
             f.writelines(f"{s} {v} {o}\n" for s, (v, o) in sorted(added.items()))
@@ -138,7 +213,8 @@ def main():
         with open(os.path.join(outdir, name + ".unresolved"), "w") as f:
             f.writelines(f"{s}: {why}\n" for s, why in sorted(unresolved.items()))
         n_deb = sum(1 for _, o in added.values() if o == "debian")
-        print(f"{name}: {len(added)} sources added ({n_deb} only in Debian), {len(imports)} arch:all binaries, "
+        print(f"{name}: {len(added)} sources added ({n_deb} only in Debian), {len(imports)} binaries imported "
+              f"({len(noelf)} of them ELF-free architecture-dependent packages, decision 13), "
               f"{len(unresolved)} sources with unresolvable build dependencies")
 
 
