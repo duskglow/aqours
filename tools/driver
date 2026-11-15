@@ -15,6 +15,9 @@ Operating rules (learned by Liella, adopted by Aqours):
   - No retries: a failure is a result, recorded once. Requeue by hand after a fix.
   - Systemic detector: when the same failure signature hits 3 or more different
     sources, dispatch stops and an event is raised. Fix the shared cause first.
+    A cause that is understood and has a planned fix can be acknowledged in the
+    "acknowledged-signatures" file next to the database (regex, TAB, reason);
+    its failures are still recorded but no longer stop the line.
   - The build host's slots queue decides what fits on its cores; the driver only
     keeps up to "max" jobs outstanding per host.
   - Large sources are dispatched first so they don't straggle at the end.
@@ -71,6 +74,16 @@ def signature(failstage, logpath, host):
     """A coarse failure signature: the failing stage plus the first error-looking line."""
     if not logpath or logpath == "-":
         return failstage or "nolog"
+    if failstage == "install-deps":
+        # Name the build dependency that can't be installed, not apt's generic line.
+        try:
+            out = subprocess.run(["ssh", "-o", "BatchMode=yes", host,
+                                  f"zstdcat {logpath} | grep -a -m1 -oE 'Depends: [^ ]+( \\([^)]*\\))? but [a-z ]+' "
+                                  "| cut -c1-160"], capture_output=True, text=True, timeout=60).stdout.strip()
+        except Exception:
+            out = ""
+        if out:
+            return f"install-deps: {out}"
     # The first line that names the actual failure: a debhelper error, a compiler
     # error, a test-suite FAIL, or an sbuild E: line other than the generic
     # "Build failure". Anchored, because sbuild's preamble has lines like
@@ -103,13 +116,30 @@ def record(c, con, stage, h, src, ver, text, stop):
                 (res, h, time.time(), secs, fstage, sig, log, stage, src, ver))
     print(f"{time.strftime('%H:%M:%S')} {h:6} {res:5} {secs:6}s {src} {ver}" + (f"  [{sig}]" if sig else ""),
           flush=True)
-    if sig:
+    if sig and not acknowledged(sig):
         n = con.execute("select count(distinct source) from jobs where stage=? and signature=?",
                         (stage, sig)).fetchone()[0]
         if n >= SYSTEMIC and not stop.is_set():
             stop.set()
             event(c, f"systemic-stop {stage}: signature hit {n} sources: {sig}")
     return sig
+
+
+def acknowledged(sig):
+    """True when sig matches a line of the acknowledged-signatures file next to the db.
+
+    Each non-comment line is "regex<TAB>reason". An acknowledged signature is a
+    shared cause that is understood and has a planned fix; its failures are still
+    recorded, but they don't stop the line."""
+    path = os.path.join(os.path.dirname(conf()["db"]), "acknowledged-signatures")
+    try:
+        for line in open(path):
+            line = line.rstrip("\n")
+            if line and not line.startswith("#") and re.search(line.split("\t")[0], sig):
+                return True
+    except OSError:
+        pass
+    return False
 
 
 def stop_requested(stage):
@@ -123,6 +153,7 @@ def run(stage):
     stop = threading.Event()
     outstanding = {h: 0 for h in hosts}
     logs = c.get("logs", "")
+    buildone_path = c.get("buildone", "/home/claude/aqours/tools/buildone")
 
     def adopt(h, src, ver):
         """Wait for a build started by an earlier driver: poll its result file on the host."""
@@ -130,9 +161,14 @@ def run(stage):
         rfile = f"{logs}/{stage}/{src}_{ver}.result"
         try:
             while True:
+                # Fixed-string match on the command line: versions contain regex
+                # metacharacters ("+"), so pgrep -f would miss a running build.
                 p = subprocess.run(["ssh", "-o", "BatchMode=yes", ssh,
-                                    f"cat {rfile} 2>/dev/null || (pgrep -f 'buildone {stage} {src} {ver}' >/dev/null "
-                                    f"&& echo RUNNING || echo GONE)"], capture_output=True, text=True)
+                                    f"cat '{rfile}' 2>/dev/null || (ps -eo args | grep -qxF "
+                                    f"'/bin/bash {buildone_path} {stage} {src} {ver}' && echo RUNNING || echo GONE)"],
+                                   capture_output=True, text=True)
+                if p.returncode == 255:      # ssh itself failed: the host is unreachable, not the build gone
+                    time.sleep(60); continue
                 out = p.stdout.strip()
                 if out.startswith("RESULT"):
                     record(c, con, stage, h, src, ver, out, stop); return
@@ -167,20 +203,27 @@ def run(stage):
         return src, ver
 
     def worker(h, src, ver):
+        """Start the build detached on the host, then wait for its result file.
+
+        The build never depends on this driver's SSH session or process: a
+        driver restart (or a dropped connection) can't kill it, and the next
+        driver adopts it."""
         ssh = hosts[h]["ssh"]
         con = db(c)
         con.execute("update jobs set host=? where stage=? and source=? and version=?", (h, stage, src, ver))
-        try:
-            p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=60", ssh,
-                                f"~/aqours/tools/buildone {stage} {src} {ver}"],
-                               capture_output=True, text=True)
-            if not RESULT_RE.search(p.stdout):
-                event(c, f"host-trouble {h}: buildone gave no result for {src} {ver} (ssh exit {p.returncode}): "
-                         + (p.stderr.strip().splitlines() or ["-"])[-1][:200])
-            record(c, con, stage, h, src, ver, p.stdout, stop)
-        finally:
+        p = subprocess.run(["ssh", "-n", "-o", "BatchMode=yes", ssh,
+                            f"setsid nohup {buildone_path} {stage} {src} {ver} >/dev/null 2>&1 < /dev/null &"],
+                           capture_output=True, text=True)
+        if p.returncode != 0:
+            event(c, f"host-trouble {h}: could not start {src} {ver} (ssh exit {p.returncode}): "
+                     + (p.stderr.strip().splitlines() or ["-"])[-1][:200])
+            con.execute("update jobs set status=?, host=null, started=null where stage=? and source=? and version=?",
+                        (QSTATUS, stage, src, ver))
             with lock:
                 outstanding[h] -= 1
+            return
+        time.sleep(30)          # let buildone clear any stale result file before the first poll
+        adopt(h, src, ver)      # polls the result file; releases the host's count when done
 
     while not stop.is_set():
         if stop_requested(stage):
@@ -232,7 +275,7 @@ def resig(stage):
 def failures(stage):
     c = conf(); con = db(c)
     for row in con.execute("select source, version, status, host, failstage, signature, log from jobs "
-                           "where stage=? and status not in ('ok','queued','running') order by source", (stage,)):
+                           "where stage=? and status in ('fail','hang','error') order by source", (stage,)):
         print(" | ".join(str(x) for x in row))
 
 
