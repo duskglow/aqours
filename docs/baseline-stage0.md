@@ -35,15 +35,15 @@ the NVIDIA and AMD GPU offload compilers, then runs the test suite in three conf
 
 Like Debian's, gcc's packaging records test failures without failing the build. This run had 215 distinct failing
 tests, a small fraction of the suite. That's the glibc reference that stage 1 is compared against, test by test:
-- 102 are the `-fhardened` tests under C++ options (`c-c++-common/fhardened-*`), which conflict with the hardening
-  flags Debian's gcc enables by default;
+- 102 are the `-fhardened` tests under C++ options (`c-c++-common/fhardened-*`), probably conflicting with the hardening
+  flags Debian's gcc enables by default (not yet investigated);
 - 35 are ThreadSanitizer (`tsan`), and 42 are OpenMP runtime (`libgomp`), both timing- and scheduling-sensitive on a
   shared, over-committed VM;
 - the rest are scattered: 22 in `gcc.dg`, 3 in `gcc.target/i386`, and about ten in Go and its runtime.
 
 Note for later: the `-m32` configuration tests 32-bit code generation, which Aqours doesn't ship (no multilib, design
-section 1), and decision 16 already drops the GPU offload compilers for the bootstrap. Together they account for
-most of gcc's build time.
+section 1), and decision 16 already drops the GPU offload compilers for the bootstrap. Those two are
+the main levers on gcc's build time (not yet measured).
 
 ## Build times
 
