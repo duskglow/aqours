@@ -154,8 +154,9 @@ def main():
 
         # Aqours's per-source declarations (packages/<source>/): build-profiles is
         # the profiles Aqours builds the source with (e.g. nodoc); drop-build-deps
-        # lists binary build dependencies that the source's Aqours patch removes
-        # (decision 14: e.g. pandoc), so they are left out of the closure here.
+        # lists Build-Depends entries (as named in debian/control) that the source's
+        # Aqours patch removes (decisions 14 and 16), so the closure is resolved from
+        # the trimmed Build-Depends with `apt-get satisfy`.
         pkgroot = os.environ.get("AQOURS_PACKAGES", "")
 
         def declared(src, what):
@@ -168,12 +169,51 @@ def main():
         # source, to measure a minimal bootstrap closure.
         global_profiles = [p for p in os.environ.get("AQOURS_GLOBAL_PROFILES", "").split(",") if p]
 
+        # Source stanzas, for sources whose Build-Depends Aqours trims (drop-build-deps).
+        sources = {}
+        for fn in sorted(os.listdir(lists)):
+            if fn.endswith("_Sources"):
+                for st in read_stanzas(os.path.join(lists, fn)):
+                    sources.setdefault(st["Package"], []).append(st)
+
+        def trimmed_build_depends(src, version, drop):
+            """The source's Build-Depends and Build-Depends-Arch, minus the dropped
+            packages (an alternative group that loses every member is dropped).
+            Profile and architecture qualifiers are kept for apt to evaluate."""
+            sts = sources.get(src, [])
+            st = next((s for s in sts if s.get("Version") == version), sts[0] if sts else None)
+            if st is None:
+                return None
+            text = ", ".join(st.get(k, "") for k in ("Build-Depends", "Build-Depends-Arch") if st.get(k))
+            groups = []
+            for group in re.sub(r"\s+", " ", text).split(","):
+                alts = [a.strip() for a in group.split("|") if a.strip()]
+                keep = [a for a in alts if re.split(r"[\s(\[<:]", a, 1)[0] not in drop]
+                if keep:
+                    groups.append(" | ".join(keep))
+            return ", ".join(groups)
+
+        # AQOURS_ADDED_PROFILES (e.g. "nocheck") applies only to sources added beyond the
+        # input set: decision 15 builds T2 with nocheck while T0/T1 keep their tests.
+        added_profiles = [p for p in os.environ.get("AQOURS_ADDED_PROFILES", "").split(",") if p]
+
         def resolve(src):
-            cmd = ["apt-get", "build-dep", "-s", "-q", "--arch-only"]
-            profiles = sorted(set(declared(src, "build-profiles")) | set(global_profiles))
-            if profiles:
-                cmd += ["-P", ",".join(profiles)]
-            r = subprocess.run(cmd + [src], env=env, capture_output=True, text=True)
+            profiles = set(declared(src, "build-profiles")) | set(global_profiles)
+            if src not in start:
+                profiles |= set(added_profiles)
+            profiles = sorted(profiles)
+            popt = ["-P", ",".join(profiles)] if profiles else []
+            drop = set(declared(src, "drop-build-deps"))
+            if drop:
+                # Aqours's patch removes these build dependencies (decisions 14 and 16):
+                # resolve the trimmed Build-Depends instead of the archive's.
+                deps = trimmed_build_depends(src, have.get(src), drop)
+                if deps is not None:
+                    r = subprocess.run(["apt-get", "satisfy", "-s", "-q"] + popt + [deps],
+                                       env=env, capture_output=True, text=True)
+                    return src, r
+            r = subprocess.run(["apt-get", "build-dep", "-s", "-q", "--arch-only"] + popt + [src],
+                               env=env, capture_output=True, text=True)
             return src, r
 
         have = dict(start)          # sources in the set
@@ -194,10 +234,9 @@ def main():
                         unresolved[src] = out.splitlines()[-1][:200] if out else "?"
                         continue
                     cands = []
-                    dropped = set(declared(src, "drop-build-deps"))
                     for n, v in re.findall(r"^Inst (\S+) \((\S+)", r.stdout, re.M):
                         info = bins.get((n, v))
-                        if not info or n in dropped:
+                        if not info:
                             continue
                         if info[2] == "all":
                             imports.add((n, v)); continue

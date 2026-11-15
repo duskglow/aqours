@@ -1,0 +1,9 @@
+ghostscript
+libx11-dev
+libxaw7-dev
+libxmu-dev
+libxt-dev
+netpbm
+psutils
+texlive-base
+texlive-latex-base
