@@ -16,6 +16,10 @@
 #   - the dpkg vendor is Debian, as it was for the Debian builds of these
 #     packages, so vendor checks behave as on Debian.
 #
+# With --liella-swap VERSION --aqours-repo URL (stage 1, decision 12), Liella's
+# system flavour at VERSION replaces glibc in the chroot, with throwaway glibc
+# headers; see tools/liella-swap.sh. Its log is printed at the end.
+#
 # Uses mmdebstrap --mode=unshare (no root). Each mirror is trusted only through
 # its signed InRelease, checked against the pinned keyrings in --keyrings DIR;
 # never [trusted=yes]. The keyrings are also installed in the chroot so that
@@ -38,6 +42,8 @@ while [ $# -gt 1 ]; do
     --debian) DEBIAN=$2; shift 2;;
     --debian-security) DEBSEC=$2; shift 2;;
     --debian-suite) DSUITE=$2; shift 2;;
+    --liella-swap) LIELLA_VERSION=$2; shift 2;;   # stage 1: swap Liella's system flavour in (decision 12)
+    --aqours-repo) AQOURS_REPO=$2; shift 2;;      # where the "liella" suite is served
     *) echo "unknown option: $1" >&2; exit 2;;
   esac
 done
@@ -79,6 +85,17 @@ Pin-Priority: 500"
          --customize-hook="copy-in $DKR /etc/apt/trusted.gpg.d/"
          --customize-hook='ln -sfn debian "$1/etc/dpkg/origins/default"')
   keyring=(--keyring="$KEYRINGS")
+fi
+
+if [ -n "${LIELLA_VERSION:-}" ]; then
+  # Stage 1 (decision 12): Liella's system flavour replaces glibc in the chroot. See tools/liella-swap.sh.
+  AKR="$KEYRINGS/aqours-archive-keyring.gpg"
+  [ -n "${AQOURS_REPO:-}" ] || { echo "mkchroot: --liella-swap needs --aqours-repo URL" >&2; exit 2; }
+  [ -r "$AKR" ] || { echo "mkchroot: missing $AKR" >&2; exit 2; }
+  hooks+=(--customize-hook="copy-in $AKR /etc/apt/trusted.gpg.d/"
+          --customize-hook="upload $(cd "$(dirname "$0")" && pwd)/liella-swap.sh /tmp/aqours-liella-swap.sh"
+          --customize-hook="chroot \"\$1\" sh /tmp/aqours-liella-swap.sh '$LIELLA_VERSION' '$AQOURS_REPO'"
+          --customize-hook='rm -f "$1/tmp/aqours-liella-swap.sh"; cat "$1/var/log/aqours-liella-swap.log" >&2')
 fi
 
 case "$OUT" in *.tar.zst) ;; *) echo "mkchroot: OUTPUT must end in .tar.zst" >&2; exit 2;; esac
