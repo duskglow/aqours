@@ -2,20 +2,33 @@
 # Boot check: Liella's coexistence flavour (liella6) beside glibc.
 # Runs Devuan's own programs under Liella's loader and compares output and exit
 # status with the same programs on glibc. Prints one AQOURS-CHECK line per item.
+#
+# By design the coexistence loader searches only Liella's own library directory
+# (docs/install-packages.md in duskglow/liella): a program that needs a system
+# library must name its directory. These are distribution programs built for
+# glibc, so the system directory is given *after* Liella's own; Liella's
+# libc.so.6 is then found first and the other libraries come from the system.
 L=/usr/lib/liella/lib64/ld-linux-x86-64.so.2
+LDIR=/usr/lib/liella/usr/lib/x86_64-linux-gnu
+SYSDIR=/usr/lib/x86_64-linux-gnu
 n=0; bad=0
 check() {   # check NAME COMMAND...: same stdout and status under glibc and Liella
   name=$1; shift
   ref=$("$@" 2>/dev/null); rs=$?
-  got=$("$L" "$@" 2>/dev/null); gs=$?
+  got=$(LD_LIBRARY_PATH="$LDIR:$SYSDIR" "$L" "$@" 2>/tmp/aq-err); gs=$?
   n=$((n + 1))
   if [ "$ref" = "$got" ] && [ "$rs" = "$gs" ]; then echo "AQOURS-CHECK: liella6 $name OK"
-  else bad=$((bad + 1)); echo "AQOURS-CHECK: liella6 $name FAIL (status glibc=$rs liella=$gs)"; fi
+  else bad=$((bad + 1)); echo "AQOURS-CHECK: liella6 $name FAIL (status glibc=$rs liella=$gs; $(head -c 160 /tmp/aq-err | tr '\n' ' '))"; fi
 }
 if [ ! -x "$L" ]; then echo "AQOURS-CHECK: liella6 loader FAIL (missing $L)"; exit 1; fi
-libc=$("$L" --list /bin/ls 2>&1 | grep 'libc.so.6' | head -1)
+# Liella's libc comes from Liella's directory even though the system directory is on the path.
+list=$(LD_LIBRARY_PATH="$LDIR:$SYSDIR" "$L" --list /bin/ls 2>&1)
+libc=$(echo "$list" | grep 'libc.so.6' | head -1)
 case "$libc" in *"/usr/lib/liella/"*) echo "AQOURS-CHECK: liella6 resolves-own-libc OK";;
-  *) echo "AQOURS-CHECK: liella6 resolves-own-libc FAIL ($libc)"; bad=$((bad + 1));; esac
+  *) echo "AQOURS-CHECK: liella6 resolves-own-libc FAIL ($(echo "$list" | head -c 200 | tr '\n' ' '))"; bad=$((bad + 1));; esac
+sel=$(echo "$list" | grep 'libselinux' | head -1)
+case "$sel" in *"$SYSDIR/"*) echo "AQOURS-CHECK: liella6 system-libs-from-system OK";;
+  *) echo "AQOURS-CHECK: liella6 system-libs-from-system FAIL ($sel)"; bad=$((bad + 1));; esac
 printf 'pear\napple\nfig\napple\n' > /tmp/aq-in
 check ls        /bin/ls -la /etc/init.d
 check sort      /usr/bin/sort /tmp/aq-in
@@ -28,6 +41,6 @@ check cat       /bin/cat /etc/os-release
 check id        /usr/bin/id -u
 check date      /bin/date -u -d @0 +%Y-%m-%dT%H:%M:%S
 check false     /bin/false
-rm -f /tmp/aq-in
-echo "AQOURS-CHECK: liella6 summary $((n - bad + 1))/$((n + 1)) passed"
+rm -f /tmp/aq-in /tmp/aq-err
+echo "AQOURS-CHECK: liella6 summary $((n + 2 - bad))/$((n + 2)) passed"
 [ "$bad" -eq 0 ]
