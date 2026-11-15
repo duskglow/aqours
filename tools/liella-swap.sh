@@ -27,11 +27,12 @@ W=$(mktemp -d); cd "$W"
 echo "deb $REPO liella main" > /etc/apt/sources.list.d/aqours-liella.list
 apt-get update -qq
 
-# 1. headers package
-apt-get download -qq libc6-dev linux-libc-dev
-gv=$(dpkg-deb -f libc6-dev_*.deb Version)
-mkdir -p hd/x hd/l hd/pkg/DEBIAN
-dpkg-deb -x libc6-dev_*.deb hd/x; dpkg-deb -x linux-libc-dev_*.deb hd/l
+# 1. headers package (glibc's libc6-dev is downloaded into its own directory,
+#    so it can never be confused with Liella's libc6-dev below)
+mkdir -p hd/x hd/l hd/pkg/DEBIAN hd/src swap
+(cd hd/src && apt-get download -qq libc6-dev linux-libc-dev)
+gv=$(dpkg-deb -f hd/src/libc6-dev_*.deb Version)
+dpkg-deb -x hd/src/libc6-dev_*.deb hd/x; dpkg-deb -x hd/src/linux-libc-dev_*.deb hd/l
 (cd hd/x && find usr/include -type f -o -type l) | sort > hd/glibc.list
 (cd hd/l && find usr/include -type f -o -type l) | sort > hd/linux.list
 comm -23 hd/glibc.list hd/linux.list > hd/keep.list
@@ -52,10 +53,17 @@ C
 dpkg-deb -Zxz -b hd/pkg aqours-glibc-headers.deb >/dev/null
 log "headers: aqours-glibc-headers ${gv}+aqours.stage1, $(wc -l < hd/keep.list) files"
 
-# 2. swap
-apt-get download -qq "libc6=$LV" "libc-bin=$LV" "libc6-dev=$LV"
-dpkg -i --force-depends --force-overwrite aqours-glibc-headers.deb libc6_*.deb libc-bin_*.deb libc6-dev_*.deb >/dev/null 2>dpkg.err || { cat dpkg.err; exit 1; }
-for p in libc6 libc-bin libc6-dev aqours-glibc-headers; do log "installed: $p $(dpkg-query -W -f='${Version}' $p)"; done
+# 2. swap: Liella's three packages, each named exactly, then verified
+(cd swap && apt-get download -qq "libc6=$LV" "libc-bin=$LV" "libc6-dev=$LV")
+dpkg -i --force-depends --force-overwrite aqours-glibc-headers.deb \
+  "swap/libc6_${LV}_amd64.deb" "swap/libc-bin_${LV}_amd64.deb" "swap/libc6-dev_${LV}_amd64.deb" >/dev/null 2>dpkg.err \
+  || { cat dpkg.err; exit 1; }
+for pv in "libc6 $LV" "libc-bin $LV" "libc6-dev $LV" "aqours-glibc-headers ${gv}+aqours.stage1"; do
+  set -- $pv
+  got=$(dpkg-query -W -f='${Version}' "$1" 2>/dev/null || echo none)
+  [ "$got" = "$2" ] || { log "SWAP FAILED: $1 is $got, expected $2"; cat dpkg.err; exit 1; }
+  log "installed: $1 $got"
+done
 
 # 3. pin
 cat > /etc/apt/preferences.d/aqours-liella-swap <<P
