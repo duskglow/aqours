@@ -13,6 +13,15 @@
 # Needs ~/aqours/env (AQOURS_CHROOT, AQOURS_SCRATCH, AQOURS_LOGS, SBUILD_CONFIG, ...).
 set -uo pipefail
 STAGE=${1:?usage: buildone STAGE SOURCE VERSION}; SRC=${2:?}; VER=${3:?}
+
+# Builds are started detached from a short SSH command. Their inherited session
+# keyring belongs to that SSH login, and PAM (pam_keyinit "force revoke")
+# revokes it when the login ends, so tests that use the session keyring (krb5's
+# t_cccol.py) would fail. Run every build in a fresh anonymous session keyring.
+if [ -z "${AQOURS_OWN_KEYRING:-}" ] && command -v keyctl >/dev/null; then
+  export AQOURS_OWN_KEYRING=1
+  exec keyctl session - "$0" "$@"
+fi
 . "$HOME/aqours/env"
 : "${AQOURS_LOGS:?set AQOURS_LOGS}" "${AQOURS_CHROOT:?}" "${AQOURS_SCRATCH:?}"
 
@@ -49,6 +58,11 @@ start=$SECONDS
 # gcc or binutils with their test suites run longer. Our own backstop below is
 # the only time limit, so lift the queue's cap just above it.
 backstop_h=${AQOURS_BUILD_BACKSTOP_H:-8}
+# slots pins each job to a block of cores (it serves timing runs too). Builds
+# need no pinning, and some test suites assume CPU 0 is in their affinity mask
+# (libuv's thread_affinity), so pinning makes results depend on which block a
+# job got. A no-op pin helper leaves builds unpinned; the queue still counts cores.
+export SLOT_PIN_BIN=/bin/true
 SLOT_MAX_MIN=$(( backstop_h * 60 + 15 )) SLOT_SIZE=$SIZE "$HOME/bin/slots" 1 "aqours:$STAGE:$SRC" \
   timeout --kill-after=5m "${backstop_h}h" \
   sbuild --chroot="$AQOURS_CHROOT" --dist=excalibur "${opts[@]}" "${SRC}_${VER}" >/dev/null 2>&1
