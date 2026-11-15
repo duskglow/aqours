@@ -45,8 +45,12 @@ case "$SIZE" in S) jobs=$(( (jobs + 1) / 2 ));; L) jobs=$((jobs * 2));; esac
 export DEB_BUILD_OPTIONS="parallel=$jobs $dbo"
 
 start=$SECONDS
-SLOT_SIZE=$SIZE "$HOME/bin/slots" 1 "aqours:$STAGE:$SRC" \
-  timeout --kill-after=5m "${AQOURS_BUILD_BACKSTOP:-8h}" \
+# slots caps a shared job's run time (SLOT_MAX_MIN, default 150 minutes), and
+# gcc or binutils with their test suites run longer. Our own backstop below is
+# the only time limit, so lift the queue's cap just above it.
+backstop_h=${AQOURS_BUILD_BACKSTOP_H:-8}
+SLOT_MAX_MIN=$(( backstop_h * 60 + 15 )) SLOT_SIZE=$SIZE "$HOME/bin/slots" 1 "aqours:$STAGE:$SRC" \
+  timeout --kill-after=5m "${backstop_h}h" \
   sbuild --chroot="$AQOURS_CHROOT" --dist=excalibur "${opts[@]}" "${SRC}_${VER}" >/dev/null 2>&1
 rc=$?
 secs=$((SECONDS - start))

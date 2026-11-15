@@ -1,32 +1,56 @@
 #!/bin/bash
-# mkchroot: build an sbuild chroot tarball for Devuan excalibur, unprivileged.
+# mkchroot: build an sbuild chroot tarball, unprivileged.
 #
-#   tools/mkchroot [--mirror URL] [--keyrings DIR] [--suite SUITE] OUTPUT.tar.zst
+#   tools/mkchroot [--mirror URL] [--keyrings DIR] [--suite SUITE]
+#                  [--debian URL --debian-security URL] OUTPUT.tar.zst
 #
-# Uses mmdebstrap --mode=unshare (no root). The mirror is trusted only through
+# Default: a Devuan excalibur chroot.
+#
+# With --debian and --debian-security, the build environment is Debian trixie
+# with Devuan excalibur layered over it (design decision 11, "build like
+# Debian, ship like Devuan"):
+#   - excalibur (Origin: Devuan) is pinned to 600, so any package Devuan has,
+#     including its forks, comes from Devuan;
+#   - trixie (Origin: Debian) stays at 500, so packages Devuan dropped, such as
+#     systemd's build-time pieces, still resolve as they do on Debian's buildds;
+#   - the dpkg vendor is Debian, as it was for the Debian builds of these
+#     packages, so vendor checks behave as on Debian.
+#
+# Uses mmdebstrap --mode=unshare (no root). Each mirror is trusted only through
 # its signed InRelease, checked against the pinned keyrings in --keyrings DIR;
 # never [trusted=yes]. The keyrings are also installed in the chroot so that
 # apt inside it checks the same signatures.
 set -euo pipefail
 
 MIRROR=${AQOURS_MIRROR:-}
+DEBIAN=${AQOURS_DEBIAN_MIRROR:-}
+DEBSEC=${AQOURS_DEBIAN_SECURITY_MIRROR:-}
 # The keyrings must be readable by the unshare namespace's mapped root, which
 # can't enter a mode-750 home directory, so keep them outside $HOME.
 KEYRINGS=${AQOURS_KEYRINGS:-}
 SUITE=excalibur
+DSUITE=trixie
 while [ $# -gt 1 ]; do
   case "$1" in
     --mirror) MIRROR=$2; shift 2;;
     --keyrings) KEYRINGS=$2; shift 2;;
     --suite) SUITE=$2; shift 2;;
+    --debian) DEBIAN=$2; shift 2;;
+    --debian-security) DEBSEC=$2; shift 2;;
+    --debian-suite) DSUITE=$2; shift 2;;
     *) echo "unknown option: $1" >&2; exit 2;;
   esac
 done
-OUT=${1:?usage: mkchroot [--mirror URL] [--keyrings DIR] [--suite SUITE] OUTPUT.tar.zst}
+OUT=${1:?usage: mkchroot [--mirror URL] [--keyrings DIR] [--suite S] [--debian URL --debian-security URL] OUTPUT.tar.zst}
 [ -n "$MIRROR" ] || { echo "mkchroot: set --mirror or AQOURS_MIRROR (the Devuan mirror base URL)" >&2; exit 2; }
 [ -n "$KEYRINGS" ] || { echo "mkchroot: set --keyrings or AQOURS_KEYRINGS (directory of pinned archive keyrings)" >&2; exit 2; }
 KR="$KEYRINGS/devuan-archive-keyring.gpg"
+DKR="$KEYRINGS/debian-archive-keyring.gpg"
 [ -r "$KR" ] || { echo "mkchroot: missing $KR" >&2; exit 2; }
+if [ -n "$DEBIAN" ] || [ -n "$DEBSEC" ]; then
+  [ -n "$DEBIAN" ] && [ -n "$DEBSEC" ] || { echo "mkchroot: --debian needs --debian-security too" >&2; exit 2; }
+  [ -r "$DKR" ] || { echo "mkchroot: missing $DKR" >&2; exit 2; }
+fi
 
 SOURCES="deb $MIRROR $SUITE main
 deb $MIRROR $SUITE-updates main
@@ -34,6 +58,28 @@ deb $MIRROR $SUITE-security main
 deb-src $MIRROR $SUITE main
 deb-src $MIRROR $SUITE-updates main
 deb-src $MIRROR $SUITE-security main"
+
+hooks=(--customize-hook="mkdir -p \"\$1/etc/apt/trusted.gpg.d\"" --customize-hook="copy-in $KR /etc/apt/trusted.gpg.d/")
+keyring=(--keyring="$KR")
+if [ -n "$DEBIAN" ]; then
+  SOURCES+="
+deb $DEBIAN $DSUITE main
+deb $DEBIAN $DSUITE-updates main
+deb $DEBSEC $DSUITE-security main"
+  PREFS="Package: *
+Pin: release o=Devuan
+Pin-Priority: 600
+
+Package: *
+Pin: release o=Debian
+Pin-Priority: 500"
+  # The preferences must exist before mmdebstrap's first apt run, so a setup hook writes them.
+  hooks=(--setup-hook="mkdir -p \"\$1/etc/apt/preferences.d\" && printf '%s\n' '$PREFS' > \"\$1/etc/apt/preferences.d/aqours-overlay\""
+         "${hooks[@]}"
+         --customize-hook="copy-in $DKR /etc/apt/trusted.gpg.d/"
+         --customize-hook='ln -sfn debian "$1/etc/dpkg/origins/default"')
+  keyring=(--keyring="$KEYRINGS")
+fi
 
 case "$OUT" in *.tar.zst) ;; *) echo "mkchroot: OUTPUT must end in .tar.zst" >&2; exit 2;; esac
 mkdir -p "$(dirname "$OUT")"
@@ -43,10 +89,9 @@ trap 'rm -f "$tmp"' EXIT
 # Sources come on stdin (the "-" mirror argument); the output format follows
 # from the file extension.
 mmdebstrap --mode=unshare --variant=buildd \
-  --keyring="$KR" \
+  "${keyring[@]}" \
   --include=ca-certificates \
-  --customize-hook="mkdir -p \"\$1/etc/apt/trusted.gpg.d\"" \
-  --customize-hook="copy-in $KR /etc/apt/trusted.gpg.d/" \
+  "${hooks[@]}" \
   --customize-hook='rm -f "$1"/var/cache/apt/*.bin; rm -rf "$1"/var/lib/apt/lists/*' \
   "$SUITE" "$tmp" - <<<"$SOURCES"
 
