@@ -7,9 +7,15 @@ Apart from that, Aqours stays as close to a plain Devuan base system as it can.
 
 The first release is **Snow Halation**: a base Devuan system, with sysvinit, running entirely on Liella.
 
-**Status:** infrastructure being set up. Nothing is installable yet.
+**Status:** the glibc baseline build is complete; the first builds against Liella are waiting on a Liella fix. Nothing
+is installable yet.
 
 - [Design](docs/design.md): how Aqours is built, published and tested, and what it needs from Liella.
 - Bugs in Liella found while building Aqours are reported on [duskglow/liella](https://github.com/duskglow/liella/issues).
 
-The name comes from the Love Live! Sunshine!! group.
+## Name and mascot
+
+Aqours is an independent hobby project. It is **not affiliated with, endorsed by, or sponsored by** the Love Live!
+Sunshine!! franchise, the group Aqours, or their rights holders. The name (and release codenames such as Snow Halation)
+are a fan's homage, used without any claim to them. The mascot is an original penguin character, not a likeness of any
+member of the group.
