@@ -1,0 +1,34 @@
+--- a/debian/control	2026-11-16 11:28:14.094801508 +0000
++++ b/debian/control	2026-11-16 11:28:14.130800962 +0000
+@@ -4,9 +4,7 @@
+ Maintainer: Debian GCC Maintainers <debian-gcc@lists.debian.org>
+ Uploaders: Matthias Klose <doko@debian.org>
+ Standards-Version: 4.7.0
+-Build-Depends: debhelper (>= 11), dpkg-dev (>= 1.17.14), g++-multilib [amd64 i386 mips mips64 mips64el mips64r6 mips64r6el mipsel mipsn32 mipsn32el mipsn32r6 mipsn32r6el mipsr6 mipsr6el powerpc ppc64 s390 s390x sparc sparc64 x32] <!cross>,
+-  libc6.1-dev (>= 2.23-1~) [alpha ia64] | libc0.3-dev (>= 2.23-1~) [hurd-amd64 hurd-i386] | libc6-dev (>= 2.23-1~), libc6-dev-amd64 [i386 x32], libc6-dev-sparc64 [sparc], libc6-dev-sparc [sparc64], libc6-dev-s390 [s390x], libc6-dev-s390x [s390], libc6-dev-i386 [amd64 x32], libc6-dev-powerpc [ppc64], libc6-dev-ppc64 [powerpc], lib32gcc-s1 [amd64 ppc64 mipsn32 mipsn32el mips64 mips64el mipsn32r6 mipsn32r6el mips64r6 mips64r6el s390x sparc64 x32], libn32gcc-s1 [mips mipsel mips64 mips64el mipsr6 mipsr6el mips64r6 mips64r6el], lib64gcc-s1 [i386 mips mipsel mipsn32 mipsn32el mipsr6 mipsr6el mipsn32r6 mipsn32r6el powerpc sparc s390 x32], libc6-dev-mips64 [mips mipsel mipsn32 mipsn32el mipsr6 mipsr6el mipsn32r6 mipsn32r6el], libc6-dev-mipsn32 [mips mipsel mips64 mips64el mipsr6 mipsr6el mips64r6 mips64r6el], libc6-dev-mips32 [mipsn32 mipsn32el mips64 mips64el mipsn32r6 mipsn32r6el mips64r6 mips64r6el], libc6-dev-x32 [amd64 i386], libx32gcc-s1 [amd64 i386], libc6.1-dbg [alpha ia64] | libc0.3-dbg [hurd-amd64 hurd-i386] | libc6-dbg,
+-  linux-libc-dev [m68k],
++Build-Depends: debhelper (>= 11), dpkg-dev (>= 1.17.14), libc6.1-dev (>= 2.23-1~) [alpha ia64] | libc0.3-dev (>= 2.23-1~) [hurd-amd64 hurd-i386] | libc6-dev (>= 2.23-1~), libc6-dev-amd64 [i386 x32], libc6-dev-sparc64 [sparc], libc6-dev-sparc [sparc64], libc6-dev-s390 [s390x], libc6-dev-s390x [s390], libc6-dev-powerpc [ppc64], libc6-dev-ppc64 [powerpc], libn32gcc-s1 [mips mipsel mips64 mips64el mipsr6 mipsr6el mips64r6 mips64r6el], lib64gcc-s1 [i386 mips mipsel mipsn32 mipsn32el mipsr6 mipsr6el mipsn32r6 mipsn32r6el powerpc sparc s390 x32], libc6-dev-mips64 [mips mipsel mipsn32 mipsn32el mipsr6 mipsr6el mipsn32r6 mipsn32r6el], libc6-dev-mipsn32 [mips mipsel mips64 mips64el mipsr6 mipsr6el mips64r6 mips64r6el], libc6-dev-mips32 [mipsn32 mipsn32el mips64 mips64el mipsn32r6 mipsn32r6el mips64r6 mips64r6el], linux-libc-dev [m68k],
+   m4, libtool, autoconf2.69,
+   dwz, libunwind8-dev [ia64], libatomic-ops-dev [ia64],
+   gawk, lzma, xz-utils, patchutils,
+@@ -16,7 +14,7 @@
+   gettext, nvptx-tools [amd64 arm64 ppc64el], amdgcn-tools-19 [amd64],
+   texinfo, locales-all, sharutils,
+   procps, gnat-14:native [!arc !ia64 !sh3 !sh3eb !sh4eb !m68k], g++-14:native [!m68k], gnat-13:native [m68k], g++-13:native [m68k], netbase, gdc-14:native [!alpha !arc !ia64 !m68k !sh4 !s390 !sparc64 !hurd-amd64 !hurd-i386], python3:any, cargo [!alpha !hppa !ia64 !m68k !sh4 !x32],
+-  libisl-dev (>= 0.20), libmpc-dev (>= 1.0), libmpfr-dev (>= 3.0.0-9~), libgmp-dev (>= 2:5.0.1~), lib32z1-dev [amd64], lib64z1-dev [i386], unzip <!nocheck>,
++  libisl-dev (>= 0.20), libmpc-dev (>= 1.0), libmpfr-dev (>= 3.0.0-9~), libgmp-dev (>= 2:5.0.1~), lib64z1-dev [i386], unzip <!nocheck>,
+   dejagnu <!nocheck>, git <!nocheck>, coreutils, chrpath, lsb-release, quilt, time,
+   pkgconf, libgc-dev,
+   g++-14-for-host <cross>, gobjc-14-for-host [!avr] <cross>, gfortran-14-for-host <cross>, gdc-14-for-host [!alpha !arc !ia64 !m68k !sh4 !s390 !sparc64 !hurd-amd64 !hurd-i386] <cross>, gccgo-14-for-host [!arc !avr !hppa !loong64 !m68k !sh4] <cross>, gnat-14-for-host [!arc !ia64 !sh3 !sh3eb !sh4eb] <cross>, gm2-14-for-host [!powerpc !ppc64 !sh4] <cross>,
+--- a/debian/rules.defs	2026-11-16 11:28:14.094801508 +0000
++++ b/debian/rules.defs	2026-11-16 11:28:14.130800962 +0000
+@@ -1724,7 +1724,8 @@
+ biarchx32 := no
+ flavours :=
+ define gen_biarch
+-  ifneq (yes,$$(call envfilt, biarch, , ,yes))
++  # Yohane: no multilib by default (Liella is 64-bit only); lang=biarch turns it back on.
++  ifneq (yes,$$(call envfilt, biarch, , ,no))
+     biarch$1archs :=
+   endif
+   ifneq (,$$(findstring /$$(DEB_TARGET_ARCH)/,$$(biarch$1archs)))

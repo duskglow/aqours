@@ -19,7 +19,7 @@ builds and passes its tests here but fails with Liella points at Liella; one tha
 | | Count |
 |---|---|
 | Built and passed their own tests | **172** (gcc-14 included; see below) |
-| Failed | **1** (elfutils, fixed by an Yohane patch) |
+| Failed | **1** (elfutils, fixed by a Yohane patch) |
 
 **The one failure, elfutils 0.192-4:** packaging aborts because `/etc/debuginfod/elfutils.urls` is missing. The
 packaging only creates that file when a default debuginfod server URL is configured. The URL is derived from the OS

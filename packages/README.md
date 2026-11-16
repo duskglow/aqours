@@ -32,4 +32,4 @@ Status: active | obsolete (and why)
 - **yohane-identity:** one of the minimal changes that make the system Yohane rather than Devuan (`base-files`).
 - **drop:** the package isn't built for Yohane. The README says why (e.g. it uses `GLIBC_PRIVATE`).
 
-A rebuilt package with an Yohane patch gets the version `<devuan-version>yohane<N>`; see docs/design.md, section 3.
+A rebuilt package with a Yohane patch gets the version `<devuan-version>yohane<N>`; see docs/design.md, section 3.

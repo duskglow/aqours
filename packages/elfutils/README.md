@@ -1,6 +1,6 @@
 Source: elfutils
 Applies-To: 0.192-4
-Kind: build-fix
+Kind: build-fix (both patches)
 Status: active
 
 # elfutils
@@ -21,3 +21,12 @@ Yohane imports `Architecture: all` packages from Devuan instead of building them
 Debian's, with Debian's server (`https://debuginfod.debian.net`), exactly as on Devuan today. This patch only makes
 the architecture-dependent build succeed. If the owner wants no default server, `libdebuginfod-common` would become an
 explicit exception to decision 1 (built by Yohane instead of imported).
+
+## 0002: no gcc-multilib
+
+**Problem.** elfutils build-depends on `gcc-multilib` (for its tests of 32-bit objects), which needs glibc's 32-bit
+libraries. Liella is 64-bit only and Yohane doesn't ship multilib, so in stage 1 the build dependencies couldn't be
+installed (2026-11-16).
+
+**Change.** `0002-no-gcc-multilib.patch` removes it from `debian/control`. The tests that compile 32-bit objects are
+expected to skip themselves when `-m32` doesn't work; stage 1's test results confirm it.
