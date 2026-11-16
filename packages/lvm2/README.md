@@ -5,7 +5,7 @@ Status: planned (patch written when the package is first built)
 
 # lvm2
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds lvm2 without cluster locking (dlm, corosync, sanlock) and the rest of corosync support.
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds lvm2 without cluster locking (dlm, corosync, sanlock) and the rest of corosync support.
 This keeps large build-dependency chains out of the minimal bootstrap set (they were found with
 `tools/builddeps`' chain report, `T2.why`).
 

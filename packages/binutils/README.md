@@ -5,7 +5,7 @@ Status: active
 
 # binutils
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds binutils without Java support in gprofng (pulls OpenJDK).
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds binutils without Java support in gprofng (pulls OpenJDK).
 This keeps large build-dependency chains out of the minimal bootstrap set (they were found with
 `tools/builddeps`' chain report, `T2.why`).
 

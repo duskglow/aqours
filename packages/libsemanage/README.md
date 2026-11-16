@@ -5,7 +5,7 @@ Status: active
 
 # libsemanage
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds libsemanage without the Ruby bindings.
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds libsemanage without the Ruby bindings.
 This keeps large build-dependency chains out of the minimal bootstrap set (found with
 `tools/builddeps`' chain report, `T2.why`).
 

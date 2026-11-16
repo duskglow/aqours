@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""driver: queue and dispatch Aqours builds to the build hosts, and record results.
+"""driver: queue and dispatch Yohane builds to the build hosts, and record results.
 
     tools/driver enqueue STAGE LISTFILE     add "source version" lines as queued jobs
     tools/driver run STAGE                  dispatch until the stage's queue is empty
@@ -8,7 +8,7 @@
     tools/driver resig STAGE                recompute failure signatures (after changing the rule)
 
 Settings come from ~/aqours/driver.conf (JSON):
-  {"db": ".../aqours.db", "events": ".../events.log",
+  {"db": ".../yohane.db", "events": ".../events.log",
    "hosts": {"hostA": {"ssh": "user@hostA", "max": 4}, ...},
    "publish": {"stage1": "bootstrap"}, "incoming": "...", "reprepro": "...", "gnupghome": "..."}
 A stage listed under "publish" has its successful builds (status ok, or oknc:
@@ -17,7 +17,7 @@ directory, signed on this host. With "ledger": {"tool", "repo", "as"}, every
 host is checked against the shared resource ledger before a build is started
 there; during a maintenance window it gets no new builds.
 
-Operating rules (learned by Liella, adopted by Aqours):
+Operating rules (learned by Liella, adopted by Yohane):
   - No retries: a failure is a result, recorded once. Requeue by hand after a fix.
   - Systemic detector: when the same failure signature hits 3 or more different
     sources, dispatch stops and an event is raised. Fix the shared cause first.
@@ -35,11 +35,11 @@ Operating rules (learned by Liella, adopted by Aqours):
 """
 import json, os, re, sqlite3, subprocess, sys, threading, time
 
-CONF = os.path.expanduser(os.environ.get("AQOURS_DRIVER_CONF", "~/aqours/driver.conf"))
+CONF = os.path.expanduser(os.environ.get("YOHANE_DRIVER_CONF", "~/aqours/driver.conf"))
 # The job status this driver dispatches from. Normally "queued"; a different
 # value lets a new driver take over a queue while an older one still finishes
 # its own builds (the older one only ever looks at "queued").
-QSTATUS = os.environ.get("AQOURS_QUEUE_STATUS", "queued")
+QSTATUS = os.environ.get("YOHANE_QUEUE_STATUS", "queued")
 BIG = re.compile(r"^(gcc-1\d|glibc|llvm-toolchain-.*|rustc|rust-.*|linux|binutils|systemd|perl|python3\.1\d|"
                  r"openssl|util-linux|gnutls28|krb5|bind9|vim|grub2|elfutils|gnupg2|apparmor|exim4|openssh)$")
 SYSTEMIC = 3

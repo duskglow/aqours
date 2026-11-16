@@ -5,7 +5,7 @@ Status: planned (patch written when the package is first built)
 
 # libidn2
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds libidn2 without gnulib's git use (pulls git and through it Go).
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds libidn2 without gnulib's git use (pulls git and through it Go).
 This keeps large build-dependency chains out of the minimal bootstrap set (found with
 `tools/builddeps`' chain report, `T2.why`).
 

@@ -1,16 +1,16 @@
 #!/usr/bin/python3 -I
-"""tiers: compute the Aqours tier package sets from the excalibur archive.
+"""tiers: compute the Yohane tier package sets from the excalibur archive.
 
     tools/tiers [--suite excalibur] OUTDIR
 
-Needs AQOURS_MIRROR (Devuan mirror base URL) and AQOURS_KEYRINGS. Uses apt's own
+Needs YOHANE_MIRROR (Devuan mirror base URL) and YOHANE_KEYRINGS. Uses apt's own
 resolver (a simulated install into an empty system with a private apt
 configuration, signatures checked against the pinned keyring), so a tier is
 exactly what a real install of its seeds would contain.
 
 For each tier T writes:
   OUTDIR/T.binaries  every binary package in the installation set, "name version"
-  OUTDIR/T.rebuild   source packages Aqours rebuilds (they have a binary that
+  OUTDIR/T.rebuild   source packages Yohane rebuilds (they have a binary that
                      may link libc), "source version"
   OUTDIR/T.import    binaries imported from Devuan unchanged (Architecture: all,
                      kernel images, linux-libc-dev; owner decision 1)
@@ -65,12 +65,12 @@ def main():
     if len(args) != 1:
         die("usage: tiers [--suite SUITE] OUTDIR")
     outdir = args[0]
-    mirror = os.environ.get("AQOURS_MIRROR") or die("set AQOURS_MIRROR")
-    keyrings = os.environ.get("AQOURS_KEYRINGS") or die("set AQOURS_KEYRINGS")
+    mirror = os.environ.get("YOHANE_MIRROR") or die("set YOHANE_MIRROR")
+    keyrings = os.environ.get("YOHANE_KEYRINGS") or die("set YOHANE_KEYRINGS")
     keyring = os.path.join(keyrings, "devuan-archive-keyring.gpg")
     os.makedirs(outdir, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="aqours-tiers.", dir=os.environ.get("AQOURS_SCRATCH")) as root:
+    with tempfile.TemporaryDirectory(prefix="yohane-tiers.", dir=os.environ.get("YOHANE_SCRATCH")) as root:
         for d in ("etc/apt/apt.conf.d", "etc/apt/preferences.d", "etc/apt/sources.list.d",
                   "var/lib/apt/lists/partial", "var/cache/apt/archives/partial", "var/lib/dpkg"):
             os.makedirs(os.path.join(root, d), exist_ok=True)

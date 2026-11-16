@@ -19,12 +19,12 @@ builds and passes its tests here but fails with Liella points at Liella; one tha
 | | Count |
 |---|---|
 | Built and passed their own tests | **172** (gcc-14 included; see below) |
-| Failed | **1** (elfutils, fixed by an Aqours patch) |
+| Failed | **1** (elfutils, fixed by an Yohane patch) |
 
 **The one failure, elfutils 0.192-4:** packaging aborts because `/etc/debuginfod/elfutils.urls` is missing. The
 packaging only creates that file when a default debuginfod server URL is configured. The URL is derived from the OS
 identity in base-files, which here is Devuan's, so it comes out empty; on Debian it would be Debian's debuginfod
-server. All 283 of its tests passed. **Fixed** by the Aqours `build-fix` patch in `packages/elfutils/`, verified: with
+server. All 283 of its tests passed. **Fixed** by the Yohane `build-fix` patch in `packages/elfutils/`, verified: with
 it, elfutils builds and passes its tests (stage `stage0p`).
 
 **gcc-14 14.2.0-19: built** in 8 h 14 min (sbuild `Package-Time`), with 16 parallel jobs. The first attempt was
@@ -41,7 +41,7 @@ tests, a small fraction of the suite. That's the glibc reference that stage 1 is
   investigated);
 - the rest are scattered: 22 in `gcc.dg`, 3 in `gcc.target/i386`, and about ten in Go and its runtime.
 
-Note for later: the `-m32` configuration tests 32-bit code generation, which Aqours doesn't ship (no multilib, design
+Note for later: the `-m32` configuration tests 32-bit code generation, which Yohane doesn't ship (no multilib, design
 section 1), and decision 16 already drops the GPU offload compilers for the bootstrap. Those two are
 the main levers on gcc's build time (not yet measured).
 
@@ -94,7 +94,7 @@ The lesson recorded for later stages: **when a test fails in only one environmen
 ## What follows
 
 - **Patch mechanism:** done. Stage `stage0p` applies `packages/<source>/patches/` to the verified Devuan source
-  (`tools/getsource`), versions it `<version>aqours<N>` and builds it; the elfutils patch is the first.
+  (`tools/getsource`), versions it `<version>yohane<N>` and builds it; the elfutils patch is the first.
 - **Tier T2** (the build dependencies of T0–T1, resolved in the build environment): being computed (`tools/builddeps`).
 - **Stage 1** starts with Liella's next snapshot tag. Liella's side of stage 1 was complete on 2026-11-15, and the
   snapshot is in its final validation. It ships a coexistence flavour (`liella6`, `liella6-dev`) for building against

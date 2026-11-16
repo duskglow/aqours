@@ -4,14 +4,14 @@
 #   tools/buildone STAGE SOURCE VERSION
 #
 # Runs sbuild (unshare mode, through the host's `slots` queue), keeps the log
-# and .buildinfo in $AQOURS_LOGS/STAGE/, deletes the build tree and outputs, and
+# and .buildinfo in $YOHANE_LOGS/STAGE/, deletes the build tree and outputs, and
 # prints one result line last:
 #   RESULT <ok|fail|hang|error> <seconds> <failstage> <log path>
 # Stage "stage0" is the glibc reference rebuild: architecture-dependent
 # binaries only (Architecture: all is imported, not rebuilt), with the
 # package's own build-time tests on. Nothing from stage0 is published.
-# Stage "stage0p" is the same with Aqours's patches applied (packages/<source>/).
-# Needs ~/aqours/env (AQOURS_CHROOT, AQOURS_SCRATCH, AQOURS_LOGS, SBUILD_CONFIG, ...).
+# Stage "stage0p" is the same with Yohane's patches applied (packages/<source>/).
+# Needs ~/aqours/env (YOHANE_CHROOT, YOHANE_SCRATCH, YOHANE_LOGS, SBUILD_CONFIG, ...).
 set -uo pipefail
 STAGE=${1:?usage: buildone STAGE SOURCE VERSION}; SRC=${2:?}; VER=${3:?}
 
@@ -19,17 +19,17 @@ STAGE=${1:?usage: buildone STAGE SOURCE VERSION}; SRC=${2:?}; VER=${3:?}
 # keyring belongs to that SSH login, and PAM (pam_keyinit "force revoke")
 # revokes it when the login ends, so tests that use the session keyring (krb5's
 # t_cccol.py) would fail. Run every build in a fresh anonymous session keyring.
-if [ -z "${AQOURS_OWN_KEYRING:-}" ] && command -v keyctl >/dev/null; then
-  export AQOURS_OWN_KEYRING=1
+if [ -z "${YOHANE_OWN_KEYRING:-}" ] && command -v keyctl >/dev/null; then
+  export YOHANE_OWN_KEYRING=1
   exec keyctl session - "$0" "$@"
 fi
 . "$HOME/aqours/env"
-: "${AQOURS_LOGS:?set AQOURS_LOGS}" "${AQOURS_CHROOT:?}" "${AQOURS_SCRATCH:?}"
+: "${YOHANE_LOGS:?set YOHANE_LOGS}" "${YOHANE_CHROOT:?}" "${YOHANE_SCRATCH:?}"
 
 # Sources whose build trees don't fit in RAM scratch build on local disk.
 case "$SRC" in
   gcc-1[0-9]|glibc|llvm-toolchain-*|rustc|rust-*|linux|firefox-esr|thunderbird|libreoffice|openjdk-*|qtwebengine-*|chromium|webkit2gtk|mesa|python3.1[0-9]|binutils|systemd|perl)
-    export AQOURS_SCRATCH=${AQOURS_SCRATCH_DISK:-$AQOURS_SCRATCH};;
+    export YOHANE_SCRATCH=${YOHANE_SCRATCH_DISK:-$YOHANE_SCRATCH};;
 esac
 # The slots reservation. Most builds spend long stretches single-threaded
 # (configure, tests, packaging), so ordinary sources reserve a small share and
@@ -41,32 +41,32 @@ case "$SRC" in
 esac
 
 work="$HOME/aqours/out/$STAGE/${SRC}_${VER}"
-logdir="$AQOURS_LOGS/$STAGE"
+logdir="$YOHANE_LOGS/$STAGE"
 rm -rf "$work"; mkdir -p "$work" "$logdir"
 rm -f "$logdir/${SRC}_${VER}.result"
 cd "$work" || exit 1
 
 case "$STAGE" in
   stage0)  opts=(--no-arch-all --arch-any); dbo="noautodbgsym"; patches=no;;   # pure baseline: Devuan as is
-  stage0p) opts=(--no-arch-all --arch-any); dbo="noautodbgsym"; patches=yes;;  # baseline + Aqours patches (glibc)
+  stage0p) opts=(--no-arch-all --arch-any); dbo="noautodbgsym"; patches=yes;;  # baseline + Yohane patches (glibc)
   # Stage 1 (decision 12): built in the chroot with Liella swapped in, tests on,
-  # Aqours patches applied; outputs gated (tools/elfgate) and staged for the
+  # Yohane patches applied; outputs gated (tools/elfgate) and staged for the
   # "bootstrap" suite.
   stage1)  opts=(--no-arch-all --arch-any); dbo="noautodbgsym"; patches=yes
-           export AQOURS_CHROOT=${AQOURS_CHROOT_STAGE1:?set AQOURS_CHROOT_STAGE1};;
+           export YOHANE_CHROOT=${YOHANE_CHROOT_STAGE1:?set YOHANE_CHROOT_STAGE1};;
   *) echo "RESULT error 0 - unknown-stage"; exit 2;;
 esac
 
-# Aqours patches: packages/<source>/patches/*.patch from the Aqours repository,
+# Yohane patches: packages/<source>/patches/*.patch from the Yohane repository,
 # applied in name order to the verified Devuan source. The result is rebuilt as
-# a new source package with version <version>aqours<N> (N from
+# a new source package with version <version>yohane<N> (N from
 # packages/<source>/revision, default 1), and that is what sbuild builds.
 target="${SRC}_${VER}"
-pkgdir="${AQOURS_PACKAGES:-}/$SRC"
-if [ "$patches" = yes ] && [ -n "${AQOURS_PACKAGES:-}" ] && ls "$pkgdir"/patches/*.patch >/dev/null 2>&1; then
+pkgdir="${YOHANE_PACKAGES:-}/$SRC"
+if [ "$patches" = yes ] && [ -n "${YOHANE_PACKAGES:-}" ] && ls "$pkgdir"/patches/*.patch >/dev/null 2>&1; then
   prep="$logdir/${SRC}_${VER}.prep.log"
   rev=$(cat "$pkgdir/revision" 2>/dev/null || echo 1)
-  newver="${VER}aqours${rev}"
+  newver="${VER}yohane${rev}"
   (
     set -e
     echo "== getsource $SRC $VER"
@@ -77,9 +77,9 @@ if [ "$patches" = yes ] && [ -n "${AQOURS_PACKAGES:-}" ] && ls "$pkgdir"/patches
       echo "== apply $(basename "$p")"
       patch -p1 -d tree --no-backup-if-mismatch < "$p"
     done
-    (cd tree && DEBEMAIL="aqours@koiren.ai" DEBFULLNAME="Aqours Maintainers" \
+    (cd tree && DEBEMAIL="aqours@koiren.ai" DEBFULLNAME="Yohane Linux Maintainers" \
       dch --newversion "$newver" --distribution excalibur --force-distribution \
-          "Aqours: apply packages/$SRC patches: $(cd "$pkgdir/patches" && ls *.patch | tr '\n' ' ')")
+          "Yohane: apply packages/$SRC patches: $(cd "$pkgdir/patches" && ls *.patch | tr '\n' ' ')")
     dpkg-source --auto-commit -b tree
   ) > "$prep" 2>&1
   prc=$?
@@ -87,24 +87,24 @@ if [ "$patches" = yes ] && [ -n "${AQOURS_PACKAGES:-}" ] && ls "$pkgdir"/patches
   if [ $prc -ne 0 ] || [ ! -f "$target" ]; then
     zstd -q -f "$prep" -o "$prep.zst" && rm -f "$prep"
     cd /; rm -rf "$work"
-    line="RESULT fail 0 aqours-patch $prep.zst"
+    line="RESULT fail 0 yohane-patch $prep.zst"
     echo "$line" > "$logdir/${SRC}_${VER}.result"; echo "$line"; exit 0
   fi
   zstd -q -f "$prep" -o "$prep.zst" && rm -f "$prep"   # keep the record of what was applied
   cd "$work"
 fi
-jobs=${AQOURS_JOBS:-8}
+jobs=${YOHANE_JOBS:-8}
 case "$SIZE" in S) jobs=$(( (jobs + 1) / 2 ));; L) jobs=$((jobs * 2));; esac
 export DEB_BUILD_OPTIONS="parallel=$jobs $dbo"
-# Build profiles: those Aqours declares for this source (packages/<source>/build-profiles,
+# Build profiles: those Yohane declares for this source (packages/<source>/build-profiles,
 # e.g. nodoc; decision 14), from stage0p on, plus, during the bootstrap (decision 15),
-# nodoc for every stage 1 build and nocheck for sources listed in $AQOURS_NOCHECK_LIST
+# nodoc for every stage 1 build and nocheck for sources listed in $YOHANE_NOCHECK_LIST
 # (T2, the packages needed only to build others). The pure stage 0 baseline uses none.
 profiles=""
 [ "$patches" = yes ] && [ -s "$pkgdir/build-profiles" ] && profiles=$(tr -s ' \n' ' ' < "$pkgdir/build-profiles")
 if [ "$STAGE" = stage1 ]; then
   profiles="$profiles nodoc"
-  [ -n "${AQOURS_NOCHECK_LIST:-}" ] && grep -qx "$SRC" "$AQOURS_NOCHECK_LIST" 2>/dev/null && profiles="$profiles nocheck"
+  [ -n "${YOHANE_NOCHECK_LIST:-}" ] && grep -qx "$SRC" "$YOHANE_NOCHECK_LIST" 2>/dev/null && profiles="$profiles nocheck"
 fi
 profiles=$(echo $profiles | tr ' ' '\n' | sort -u | tr '\n' ',' | sed 's/^,//; s/,$//')
 if [ -n "$profiles" ]; then
@@ -116,10 +116,10 @@ fi
 # slots caps a shared job's run time (SLOT_MAX_MIN, default 150 minutes), and
 # gcc or binutils with their test suites run longer. Our own backstop below is
 # the only time limit, so lift the queue's cap just above it.
-backstop_h=${AQOURS_BUILD_BACKSTOP_H:-8}
+backstop_h=${YOHANE_BUILD_BACKSTOP_H:-8}
 # gcc's test suite runs in three configurations (default, -fstack-protector,
 # -m32) and takes far longer than any other package; give it its own backstop.
-case "$SRC" in gcc-1[0-9]) backstop_h=${AQOURS_GCC_BACKSTOP_H:-24};; esac
+case "$SRC" in gcc-1[0-9]) backstop_h=${YOHANE_GCC_BACKSTOP_H:-24};; esac
 # slots pins each job to a block of cores (it serves timing runs too). Builds
 # need no pinning, and some test suites assume CPU 0 is in their affinity mask
 # (libuv's thread_affinity), so pinning makes results depend on which block a
@@ -131,9 +131,9 @@ run_sbuild() {
   local start=$SECONDS
   rm -f "$work"/*.build "$work"/*.changes "$work"/*.deb "$work"/*.buildinfo
   DEB_BUILD_OPTIONS="$DEB_BUILD_OPTIONS ${1:-}" \
-  SLOT_MAX_MIN=$(( backstop_h * 60 + 15 )) SLOT_SIZE=$SIZE "$HOME/bin/slots" 1 "aqours:$STAGE:$SRC" \
+  SLOT_MAX_MIN=$(( backstop_h * 60 + 15 )) SLOT_SIZE=$SIZE "$HOME/bin/slots" 1 "yohane:$STAGE:$SRC" \
     timeout --kill-after=5m "${backstop_h}h" \
-    sbuild --chroot="$AQOURS_CHROOT" --dist=excalibur "${opts[@]}" "$target" >/dev/null 2>&1
+    sbuild --chroot="$YOHANE_CHROOT" --dist=excalibur "${opts[@]}" "$target" >/dev/null 2>&1
   rc=$?
   secs=$((SECONDS - start))
   log=$(ls -t "$work"/*.build 2>/dev/null | grep -v '_amd64.build$' | head -1)
@@ -172,22 +172,22 @@ cp -f "$work"/*.buildinfo "$logdir/" 2>/dev/null
 
 # Stage 1 gate and staging for the bootstrap suite.
 if [ "$STAGE" = stage1 ] && { [ "$res" = ok ] || [ "$res" = oknc ]; }; then
-  allowed="${AQOURS_CHROOT%.tar.zst}.allowed-2.4x"
+  allowed="${YOHANE_CHROOT%.tar.zst}.allowed-2.4x"
   if [ ! -s "$allowed" ]; then
     # The GLIBC_2.40/2.41 symbols the chroot's Liella libc.so.6 defines.
-    t=$(mktemp -d); tar --zstd -C "$t" -xf "$AQOURS_CHROOT" ./usr/lib/x86_64-linux-gnu/ 2>/dev/null
+    t=$(mktemp -d); tar --zstd -C "$t" -xf "$YOHANE_CHROOT" ./usr/lib/x86_64-linux-gnu/ 2>/dev/null
     readelf --dyn-syms -W "$(readlink -f "$t/usr/lib/x86_64-linux-gnu/libc.so.6" || echo "$t/usr/lib/x86_64-linux-gnu/libc.so.6")" 2>/dev/null \
       | awk '$7 != "UND" && $8 ~ /@GLIBC_2\.4[01]$/ { sub(/@@?/, "@", $8); print $8 }' | sort -u > "$allowed.tmp"
     mv -f "$allowed.tmp" "$allowed"; rm -rf "$t"
   fi
   gatelog="$logdir/${SRC}_${VER}.gate.log"
   if "$HOME/aqours/tools/elfgate" "$allowed" "$work"/*.deb > "$gatelog" 2>&1; then
-    stagedir="${AQOURS_INCOMING:?set AQOURS_INCOMING}/$STAGE/${SRC}_${VER}"
+    stagedir="${YOHANE_INCOMING:?set YOHANE_INCOMING}/$STAGE/${SRC}_${VER}"
     rm -rf "$stagedir"; mkdir -p "$stagedir"
     changes=$(ls "$work"/*.changes | head -1)
     cp "$changes" $(sed -n '/^Files:/,$p' "$changes" | awk 'NF==5{print "'"$work"'/"$5}') "$stagedir"/
   else
-    res=fail; failstage=aqours-gate
+    res=fail; failstage=yohane-gate
     zstd -q -f "$gatelog" -o "$gatelog.zst" && rm -f "$gatelog"; report_log="$gatelog.zst"
   fi
   [ -f "$gatelog" ] && { zstd -q -f "$gatelog" -o "$gatelog.zst"; rm -f "$gatelog"; }

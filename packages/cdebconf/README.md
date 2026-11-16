@@ -5,7 +5,7 @@ Status: active
 
 # cdebconf
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds cdebconf without the GTK front end (pulls GTK).
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds cdebconf without the GTK front end (pulls GTK).
 This keeps large build-dependency chains out of the minimal bootstrap set (they were found with
 `tools/builddeps`' chain report, `T2.why`).
 

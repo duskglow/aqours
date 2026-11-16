@@ -5,7 +5,7 @@ Status: planned (patch written when the package is first built)
 
 # apparmor
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds apparmor without the Apache module mod_apparmor.
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds apparmor without the Apache module mod_apparmor.
 This keeps large build-dependency chains out of the minimal bootstrap set (they were found with
 `tools/builddeps`' chain report, `T2.why`).
 

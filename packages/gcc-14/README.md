@@ -5,7 +5,7 @@ Status: planned (patch written when the package is first built)
 
 # gcc-14
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds gcc-14 without the Ada, D and Rust front ends and the GPU offload compilers: a C/C++-only bootstrap compiler (pulls LLVM 19, rustc, OCaml).
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds gcc-14 without the Ada, D and Rust front ends and the GPU offload compilers: a C/C++-only bootstrap compiler (pulls LLVM 19, rustc, OCaml).
 This keeps large build-dependency chains out of the minimal bootstrap set (they were found with
 `tools/builddeps`' chain report, `T2.why`).
 

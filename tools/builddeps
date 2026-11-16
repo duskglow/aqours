@@ -4,7 +4,7 @@
     tools/builddeps SOURCES-FILE OUTDIR [NAME]
 
 SOURCES-FILE has "source version" lines (e.g. tiers/T1.rebuild). Resolves build
-dependencies the way the Aqours build environment does (design decision 11):
+dependencies the way the Yohane build environment does (design decision 11):
 Debian trixie with Devuan excalibur layered over it, excalibur pinned higher.
 Uses apt's own resolver (`apt-get build-dep -s` into an empty system, private
 apt configuration, signatures checked against the pinned keyrings).
@@ -22,8 +22,8 @@ origin"), OUTDIR/NAME.import (binaries imported, not rebuilt), OUTDIR/NAME.why
 OUTDIR/NAME.unresolved (sources whose build dependencies apt couldn't resolve).
 NAME defaults to T2.
 
-Needs AQOURS_MIRROR, AQOURS_DEBIAN_MIRROR, AQOURS_DEBIAN_SECURITY_MIRROR and
-AQOURS_KEYRINGS.
+Needs YOHANE_MIRROR, YOHANE_DEBIAN_MIRROR, YOHANE_DEBIAN_SECURITY_MIRROR and
+YOHANE_KEYRINGS.
 """
 import concurrent.futures, hashlib, os, re, subprocess, sys, tarfile, tempfile, threading, urllib.request
 
@@ -59,8 +59,8 @@ def main():
     srcfile, outdir = sys.argv[1], sys.argv[2]
     name = sys.argv[3] if len(sys.argv) == 4 else "T2"
     env_get = lambda k: os.environ.get(k) or die(f"set {k}")
-    mirror, deb, debsec = env_get("AQOURS_MIRROR"), env_get("AQOURS_DEBIAN_MIRROR"), env_get("AQOURS_DEBIAN_SECURITY_MIRROR")
-    keyrings = env_get("AQOURS_KEYRINGS")
+    mirror, deb, debsec = env_get("YOHANE_MIRROR"), env_get("YOHANE_DEBIAN_MIRROR"), env_get("YOHANE_DEBIAN_SECURITY_MIRROR")
+    keyrings = env_get("YOHANE_KEYRINGS")
     dkr, ukr = os.path.join(keyrings, "devuan-archive-keyring.gpg"), os.path.join(keyrings, "debian-archive-keyring.gpg")
     os.makedirs(outdir, exist_ok=True)
     start = {}
@@ -69,7 +69,7 @@ def main():
         if len(p) >= 2:
             start[p[0]] = p[1]
 
-    with tempfile.TemporaryDirectory(prefix="aqours-bd.", dir=os.environ.get("AQOURS_SCRATCH")) as root:
+    with tempfile.TemporaryDirectory(prefix="yohane-bd.", dir=os.environ.get("YOHANE_SCRATCH")) as root:
         for d in ("etc/apt/apt.conf.d", "etc/apt/preferences.d", "etc/apt/sources.list.d",
                   "var/lib/apt/lists/partial", "var/cache/apt/archives/partial", "var/lib/dpkg"):
             os.makedirs(os.path.join(root, d), exist_ok=True)
@@ -83,7 +83,7 @@ def main():
                 f.write(f"deb-src [signed-by={ukr}] {deb} {s} main\n")
             f.write(f"deb [arch=amd64 signed-by={ukr}] {debsec} trixie-security main\n")
             f.write(f"deb-src [signed-by={ukr}] {debsec} trixie-security main\n")
-        with open(os.path.join(root, "etc/apt/preferences.d/aqours-overlay"), "w") as f:
+        with open(os.path.join(root, "etc/apt/preferences.d/yohane-overlay"), "w") as f:
             f.write("Package: *\nPin: release o=Devuan\nPin-Priority: 600\n\n"
                     "Package: *\nPin: release o=Debian\nPin-Priority: 500\n")
         conf = os.path.join(root, "apt.conf")
@@ -152,12 +152,12 @@ def main():
                     f.write(f"{n} {v} {'elf' if found else 'noelf'}\n")
             return found
 
-        # Aqours's per-source declarations (packages/<source>/): build-profiles is
-        # the profiles Aqours builds the source with (e.g. nodoc); drop-build-deps
+        # Yohane's per-source declarations (packages/<source>/): build-profiles is
+        # the profiles Yohane builds the source with (e.g. nodoc); drop-build-deps
         # lists Build-Depends entries (as named in debian/control) that the source's
-        # Aqours patch removes (decisions 14 and 16), so the closure is resolved from
+        # Yohane patch removes (decisions 14 and 16), so the closure is resolved from
         # the trimmed Build-Depends with `apt-get satisfy`.
-        pkgroot = os.environ.get("AQOURS_PACKAGES", "")
+        pkgroot = os.environ.get("YOHANE_PACKAGES", "")
 
         def declared(src, what):
             try:
@@ -165,11 +165,11 @@ def main():
             except OSError:
                 return []
 
-        # AQOURS_GLOBAL_PROFILES (e.g. "nocheck,nodoc") applies build profiles to every
+        # YOHANE_GLOBAL_PROFILES (e.g. "nocheck,nodoc") applies build profiles to every
         # source, to measure a minimal bootstrap closure.
-        global_profiles = [p for p in os.environ.get("AQOURS_GLOBAL_PROFILES", "").split(",") if p]
+        global_profiles = [p for p in os.environ.get("YOHANE_GLOBAL_PROFILES", "").split(",") if p]
 
-        # Source stanzas, for sources whose Build-Depends Aqours trims (drop-build-deps).
+        # Source stanzas, for sources whose Build-Depends Yohane trims (drop-build-deps).
         sources = {}
         for fn in sorted(os.listdir(lists)):
             if fn.endswith("_Sources"):
@@ -193,9 +193,9 @@ def main():
                     groups.append(" | ".join(keep))
             return ", ".join(groups)
 
-        # AQOURS_ADDED_PROFILES (e.g. "nocheck") applies only to sources added beyond the
+        # YOHANE_ADDED_PROFILES (e.g. "nocheck") applies only to sources added beyond the
         # input set: decision 15 builds T2 with nocheck while T0/T1 keep their tests.
-        added_profiles = [p for p in os.environ.get("AQOURS_ADDED_PROFILES", "").split(",") if p]
+        added_profiles = [p for p in os.environ.get("YOHANE_ADDED_PROFILES", "").split(",") if p]
 
         def resolve(src):
             profiles = set(declared(src, "build-profiles")) | set(global_profiles)
@@ -205,7 +205,7 @@ def main():
             popt = ["-P", ",".join(profiles)] if profiles else []
             drop = set(declared(src, "drop-build-deps"))
             if drop:
-                # Aqours's patch removes these build dependencies (decisions 14 and 16):
+                # Yohane's patch removes these build dependencies (decisions 14 and 16):
                 # resolve the trimmed Build-Depends instead of the archive's.
                 deps = trimmed_build_depends(src, have.get(src), drop)
                 if deps is not None:
@@ -223,7 +223,7 @@ def main():
         why = {}                    # source -> (the source whose build first needed it, via which binary)
         todo = sorted(start)
         rounds = 0
-        jobs = int(os.environ.get("AQOURS_BUILDDEPS_JOBS", "8"))
+        jobs = int(os.environ.get("YOHANE_BUILDDEPS_JOBS", "8"))
         with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
             while todo:
                 rounds += 1

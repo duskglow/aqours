@@ -5,7 +5,7 @@ Status: active
 
 # apt
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds apt without sqv (Sequoia, Rust) for signature checks; gpgv is used instead, so rust-sequoia-sq and rustc leave the bootstrap.
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds apt without sqv (Sequoia, Rust) for signature checks; gpgv is used instead, so rust-sequoia-sq and rustc leave the bootstrap.
 This keeps large build-dependency chains out of the minimal bootstrap set (found with
 `tools/builddeps`' chain report, `T2.why`).
 

@@ -5,7 +5,7 @@ Status: active
 
 # systemd
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds systemd without BPF, cryptsetup, fido2, qrencode, xen and other optional integrations (pulls LLVM/clang, the kernel tools, xen).
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds systemd without BPF, cryptsetup, fido2, qrencode, xen and other optional integrations (pulls LLVM/clang, the kernel tools, xen).
 This keeps large build-dependency chains out of the minimal bootstrap set (they were found with
 `tools/builddeps`' chain report, `T2.why`).
 

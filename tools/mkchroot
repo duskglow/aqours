@@ -16,7 +16,7 @@
 #   - the dpkg vendor is Debian, as it was for the Debian builds of these
 #     packages, so vendor checks behave as on Debian.
 #
-# With --liella-swap VERSION --aqours-repo URL (stage 1, decision 12), Liella's
+# With --liella-swap VERSION --yohane-repo URL (stage 1, decision 12), Liella's
 # system flavour at VERSION replaces glibc in the chroot, with throwaway glibc
 # headers; see tools/liella-swap.sh. Its log is printed at the end.
 #
@@ -26,12 +26,12 @@
 # apt inside it checks the same signatures.
 set -euo pipefail
 
-MIRROR=${AQOURS_MIRROR:-}
-DEBIAN=${AQOURS_DEBIAN_MIRROR:-}
-DEBSEC=${AQOURS_DEBIAN_SECURITY_MIRROR:-}
+MIRROR=${YOHANE_MIRROR:-}
+DEBIAN=${YOHANE_DEBIAN_MIRROR:-}
+DEBSEC=${YOHANE_DEBIAN_SECURITY_MIRROR:-}
 # The keyrings must be readable by the unshare namespace's mapped root, which
 # can't enter a mode-750 home directory, so keep them outside $HOME.
-KEYRINGS=${AQOURS_KEYRINGS:-}
+KEYRINGS=${YOHANE_KEYRINGS:-}
 SUITE=excalibur
 DSUITE=trixie
 while [ $# -gt 1 ]; do
@@ -43,13 +43,13 @@ while [ $# -gt 1 ]; do
     --debian-security) DEBSEC=$2; shift 2;;
     --debian-suite) DSUITE=$2; shift 2;;
     --liella-swap) LIELLA_VERSION=$2; shift 2;;   # stage 1: swap Liella's system flavour in (decision 12)
-    --aqours-repo) AQOURS_REPO=$2; shift 2;;      # where the "liella" suite is served
+    --yohane-repo) YOHANE_REPO=$2; shift 2;;      # where the "liella" suite is served
     *) echo "unknown option: $1" >&2; exit 2;;
   esac
 done
 OUT=${1:?usage: mkchroot [--mirror URL] [--keyrings DIR] [--suite S] [--debian URL --debian-security URL] OUTPUT.tar.zst}
-[ -n "$MIRROR" ] || { echo "mkchroot: set --mirror or AQOURS_MIRROR (the Devuan mirror base URL)" >&2; exit 2; }
-[ -n "$KEYRINGS" ] || { echo "mkchroot: set --keyrings or AQOURS_KEYRINGS (directory of pinned archive keyrings)" >&2; exit 2; }
+[ -n "$MIRROR" ] || { echo "mkchroot: set --mirror or YOHANE_MIRROR (the Devuan mirror base URL)" >&2; exit 2; }
+[ -n "$KEYRINGS" ] || { echo "mkchroot: set --keyrings or YOHANE_KEYRINGS (directory of pinned archive keyrings)" >&2; exit 2; }
 KR="$KEYRINGS/devuan-archive-keyring.gpg"
 DKR="$KEYRINGS/debian-archive-keyring.gpg"
 [ -r "$KR" ] || { echo "mkchroot: missing $KR" >&2; exit 2; }
@@ -80,7 +80,7 @@ Package: *
 Pin: release o=Debian
 Pin-Priority: 500"
   # The preferences must exist before mmdebstrap's first apt run, so a setup hook writes them.
-  hooks=(--setup-hook="mkdir -p \"\$1/etc/apt/preferences.d\" && printf '%s\n' '$PREFS' > \"\$1/etc/apt/preferences.d/aqours-overlay\""
+  hooks=(--setup-hook="mkdir -p \"\$1/etc/apt/preferences.d\" && printf '%s\n' '$PREFS' > \"\$1/etc/apt/preferences.d/yohane-overlay\""
          "${hooks[@]}"
          --customize-hook="copy-in $DKR /etc/apt/trusted.gpg.d/"
          --customize-hook='ln -sfn debian "$1/etc/dpkg/origins/default"')
@@ -89,13 +89,13 @@ fi
 
 if [ -n "${LIELLA_VERSION:-}" ]; then
   # Stage 1 (decision 12): Liella's system flavour replaces glibc in the chroot. See tools/liella-swap.sh.
-  AKR="$KEYRINGS/aqours-archive-keyring.gpg"
-  [ -n "${AQOURS_REPO:-}" ] || { echo "mkchroot: --liella-swap needs --aqours-repo URL" >&2; exit 2; }
+  AKR="$KEYRINGS/yohane-archive-keyring.gpg"
+  [ -n "${YOHANE_REPO:-}" ] || { echo "mkchroot: --liella-swap needs --yohane-repo URL" >&2; exit 2; }
   [ -r "$AKR" ] || { echo "mkchroot: missing $AKR" >&2; exit 2; }
   hooks+=(--customize-hook="copy-in $AKR /etc/apt/trusted.gpg.d/"
-          --customize-hook="upload $(cd "$(dirname "$0")" && pwd)/liella-swap.sh /tmp/aqours-liella-swap.sh"
-          --customize-hook="chroot \"\$1\" sh /tmp/aqours-liella-swap.sh '$LIELLA_VERSION' '$AQOURS_REPO'"
-          --customize-hook='rm -f "$1/tmp/aqours-liella-swap.sh"; cat "$1/var/log/aqours-liella-swap.log" >&2')
+          --customize-hook="upload $(cd "$(dirname "$0")" && pwd)/liella-swap.sh /tmp/yohane-liella-swap.sh"
+          --customize-hook="chroot \"\$1\" sh /tmp/yohane-liella-swap.sh '$LIELLA_VERSION' '$YOHANE_REPO'"
+          --customize-hook='rm -f "$1/tmp/yohane-liella-swap.sh"; cat "$1/var/log/yohane-liella-swap.log" >&2')
 fi
 
 case "$OUT" in *.tar.zst) ;; *) echo "mkchroot: OUTPUT must end in .tar.zst" >&2; exit 2;; esac

@@ -7,7 +7,7 @@
 # is opened read-only with a throwaway overlay (snapshot=on), so it is never
 # modified.
 #
-# PASS: the console shows "AQOURS-BOOTTEST: OK", no "AQOURS-CHECK: ... FAIL" line
+# PASS: the console shows "YOHANE-BOOTTEST: OK", no "YOHANE-CHECK: ... FAIL" line
 # from the image's boot checks (tools/mkimage --check), and the VM powers itself off.
 # FAIL, as soon as it is seen: a kernel panic, an init or fsck failure that drops
 # to a maintenance shell, a dracut/initramfs emergency shell, or the VM exiting
@@ -16,7 +16,7 @@
 set -uo pipefail
 DIR=${1:?usage: boottest IMAGEDIR [LOG]}
 LOG=${2:-$DIR/boot.log}
-TIMEOUT=${AQOURS_BOOT_TIMEOUT:-600}
+TIMEOUT=${YOHANE_BOOT_TIMEOUT:-600}
 FAILRE='Kernel panic|end Kernel panic|maintenance shell|Give root password for maintenance|ALERT! .* does not exist|Dropping to a shell|/bin/sh: can.t access tty|Run /init as init process.*failed|No working init found'
 
 # Never judge a previous run's console output.
@@ -25,7 +25,7 @@ rm -f "$LOG" "$LOG.qemu"; : > "$LOG"
 qemu-system-x86_64 \
   -enable-kvm -cpu host -smp 2 -m 2048 -display none -serial "file:$LOG" -monitor none -no-reboot \
   -kernel "$DIR/vmlinuz" -initrd "$DIR/initrd.img" \
-  -append "root=/dev/vda rw console=ttyS0 aqours.boottest=poweroff panic=-1" \
+  -append "root=/dev/vda rw console=ttyS0 yohane.boottest=poweroff panic=-1" \
   -drive "file=$DIR/root.ext4,format=raw,if=virtio,snapshot=on" \
   -nic none </dev/null >"$LOG.qemu" 2>&1 &
 qpid=$!
@@ -42,9 +42,9 @@ while kill -0 $qpid 2>/dev/null; do
 done
 wait $qpid; rc=$?
 
-marker=$(grep -a 'AQOURS-BOOTTEST: OK' "$LOG" | tail -1 | tr -d '\r')
-checks=$(grep -a -c '^AQOURS-CHECK: ' "$LOG")
-failed=$(grep -a '^AQOURS-CHECK: .* FAIL' "$LOG" | tr -d '\r')
+marker=$(grep -a 'YOHANE-BOOTTEST: OK' "$LOG" | tail -1 | tr -d '\r')
+checks=$(grep -a -c '^YOHANE-CHECK: ' "$LOG")
+failed=$(grep -a '^YOHANE-CHECK: .* FAIL' "$LOG" | tr -d '\r')
 if [ -z "$verdict" ]; then
   if [ -z "$marker" ]; then verdict="FAIL (VM exited, qemu status $rc, without the marker)"
   elif [ -n "$failed" ]; then verdict="FAIL ($(echo "$failed" | wc -l) of $checks boot checks failed)"
@@ -52,5 +52,5 @@ if [ -z "$verdict" ]; then
   else verdict="PASS ($marker)"; fi
 fi
 echo "boottest: $verdict  [$((SECONDS - start))s, $checks boot checks, log $LOG]"
-grep -a '^AQOURS-CHECK: ' "$LOG" | tr -d '\r'
+grep -a '^YOHANE-CHECK: ' "$LOG" | tr -d '\r'
 case "$verdict" in PASS*) exit 0;; *) tail -5 "$LOG" | tr -d '\r' | cut -c1-200; exit 1;; esac

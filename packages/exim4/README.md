@@ -5,7 +5,7 @@ Status: planned (patch written when the package is first built)
 
 # exim4
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds exim4 without the eximon X monitor and the MySQL/PostgreSQL lookups.
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds exim4 without the eximon X monitor and the MySQL/PostgreSQL lookups.
 This keeps large build-dependency chains out of the minimal bootstrap set (found with
 `tools/builddeps`' chain report, `T2.why`).
 

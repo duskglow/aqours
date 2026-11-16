@@ -5,7 +5,7 @@ Status: planned (patch written when the package is first built)
 
 # vim
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds vim without the GUI flavours (GTK, Motif) and event sounds (pulls libcanberra, samba's libtdb, PulseAudio, bluez).
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds vim without the GUI flavours (GTK, Motif) and event sounds (pulls libcanberra, samba's libtdb, PulseAudio, bluez).
 This keeps large build-dependency chains out of the minimal bootstrap set (found with
 `tools/builddeps`' chain report, `T2.why`).
 

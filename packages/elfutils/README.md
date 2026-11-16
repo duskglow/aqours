@@ -16,8 +16,8 @@ configured and is empty otherwise; an empty file means no default debuginfod ser
 
 **Verified:** builds and passes its tests with this patch (stage `stage0p`, 2026-11-15).
 
-**What Aqours actually ships.** `elfutils.urls` belongs to `libdebuginfod-common`, which is `Architecture: all`, and
-Aqours imports `Architecture: all` packages from Devuan instead of building them (decision 1). So the shipped file is
+**What Yohane actually ships.** `elfutils.urls` belongs to `libdebuginfod-common`, which is `Architecture: all`, and
+Yohane imports `Architecture: all` packages from Devuan instead of building them (decision 1). So the shipped file is
 Debian's, with Debian's server (`https://debuginfod.debian.net`), exactly as on Devuan today. This patch only makes
 the architecture-dependent build succeed. If the owner wants no default server, `libdebuginfod-common` would become an
-explicit exception to decision 1 (built by Aqours instead of imported).
+explicit exception to decision 1 (built by Yohane instead of imported).

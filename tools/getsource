@@ -3,7 +3,7 @@
 
     tools/getsource SOURCE VERSION OUTDIR
 
-Needs AQOURS_MIRROR (Devuan mirror base URL) and AQOURS_KEYRINGS. Searches
+Needs YOHANE_MIRROR (Devuan mirror base URL) and YOHANE_KEYRINGS. Searches
 excalibur, excalibur-updates and excalibur-security. The chain of trust is
 checked end to end: the suite's InRelease is verified with gpgv against the
 pinned Devuan keyring, the Sources index against InRelease's SHA256, and each
@@ -42,8 +42,8 @@ def main():
     if len(sys.argv) != 4:
         die("usage: getsource SOURCE VERSION OUTDIR")
     src, ver, outdir = sys.argv[1:]
-    mirror = (os.environ.get("AQOURS_MIRROR") or die("set AQOURS_MIRROR")).rstrip("/")
-    keyring = os.path.join(os.environ.get("AQOURS_KEYRINGS") or die("set AQOURS_KEYRINGS"),
+    mirror = (os.environ.get("YOHANE_MIRROR") or die("set YOHANE_MIRROR")).rstrip("/")
+    keyring = os.path.join(os.environ.get("YOHANE_KEYRINGS") or die("set YOHANE_KEYRINGS"),
                            "devuan-archive-keyring.gpg")
     os.makedirs(outdir, exist_ok=True)
     for suite in SUITES:

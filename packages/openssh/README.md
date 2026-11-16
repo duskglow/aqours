@@ -5,7 +5,7 @@ Status: active
 
 # openssh
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds openssh without the GNOME askpass helper (pulls GTK and about 200 sources).
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds openssh without the GNOME askpass helper (pulls GTK and about 200 sources).
 This keeps large build-dependency chains out of the minimal bootstrap set (found with
 `tools/builddeps`' chain report, `T2.why`).
 

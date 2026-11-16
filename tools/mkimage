@@ -6,7 +6,7 @@
 #
 # OUTDIR gets root.ext4, vmlinuz and initrd.img. The image boots sysvinit with
 # a serial console. A boot-test init script (rc2.d, last) prints
-#   AQOURS-BOOTTEST: OK <uname -r> runlevel=<n> libc=<libc.so.6 target>
+#   YOHANE-BOOTTEST: OK <uname -r> runlevel=<n> libc=<libc.so.6 target>
 # on the console and powers off, so tools/boottest has a deterministic signal.
 #
 # mke2fs -d runs inside mmdebstrap's user namespace, where the root tree's
@@ -18,8 +18,8 @@
 # and eudev provide them.
 set -euo pipefail
 
-MIRROR=${AQOURS_MIRROR:-}
-KEYRINGS=${AQOURS_KEYRINGS:-}
+MIRROR=${YOHANE_MIRROR:-}
+KEYRINGS=${YOHANE_KEYRINGS:-}
 SUITE=excalibur
 EXTRA_SOURCES=""
 INCLUDE="init,sysvinit-core,eudev,kmod,e2fsprogs,linux-image-amd64,initramfs-tools,procps,iproute2"
@@ -32,14 +32,14 @@ while [ $# -gt 1 ]; do
     --keyrings) KEYRINGS=$2; shift 2;;
     --source) EXTRA_SOURCES+="$2"$'\n'; shift 2;;   # an extra full sources line
     --include) INCLUDE+=",$2"; shift 2;;
-    --keyring-file) EXTRA_KEYRINGS+=("$2"); shift 2;;  # another archive keyring to trust (e.g. Aqours's)
+    --keyring-file) EXTRA_KEYRINGS+=("$2"); shift 2;;  # another archive keyring to trust (e.g. Yohane's)
     --check) CHECKS+=("$2"); shift 2;;            # a boot check script, run by the boot-test init script
     *) echo "unknown option: $1" >&2; exit 2;;
   esac
 done
 OUTDIR=${1:?usage: mkimage --mirror URL [--suite S] [--source LINE] [--include PKGS] OUTDIR}
-[ -n "$MIRROR" ] || { echo "mkimage: set --mirror or AQOURS_MIRROR" >&2; exit 2; }
-[ -n "$KEYRINGS" ] || { echo "mkimage: set --keyrings or AQOURS_KEYRINGS" >&2; exit 2; }
+[ -n "$MIRROR" ] || { echo "mkimage: set --mirror or YOHANE_MIRROR" >&2; exit 2; }
+[ -n "$KEYRINGS" ] || { echo "mkimage: set --keyrings or YOHANE_KEYRINGS" >&2; exit 2; }
 KR="$KEYRINGS/devuan-archive-keyring.gpg"
 
 mkdir -p "$OUTDIR"
@@ -57,22 +57,22 @@ $EXTRA_SOURCES"
 
 BOOTTEST='#!/bin/sh
 ### BEGIN INIT INFO
-# Provides:          aqours-boottest
+# Provides:          yohane-boottest
 # Required-Start:    $all
 # Required-Stop:
 # Default-Start:     2 3 4 5
 # Default-Stop:
-# Short-Description: Aqours boot test marker
+# Short-Description: Yohane boot test marker
 ### END INIT INFO
 case "$1" in start)
-  for c in /etc/aqours-boottest.d/*; do
+  for c in /etc/yohane-boottest.d/*; do
     [ -f "$c" ] || continue
-    sh "$c" > /dev/ttyS0 2>&1 || echo "AQOURS-CHECK: $(basename "$c") FAIL (exit $?)" > /dev/ttyS0
+    sh "$c" > /dev/ttyS0 2>&1 || echo "YOHANE-CHECK: $(basename "$c") FAIL (exit $?)" > /dev/ttyS0
   done
   rl=$(runlevel | cut -d" " -f2)
   libc=$(readlink -f /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null || echo none)
-  echo "AQOURS-BOOTTEST: OK $(uname -r) runlevel=$rl libc=$libc" > /dev/ttyS0
-  if grep -qw aqours.boottest=poweroff /proc/cmdline; then poweroff; fi;;
+  echo "YOHANE-BOOTTEST: OK $(uname -r) runlevel=$rl libc=$libc" > /dev/ttyS0
+  if grep -qw yohane.boottest=poweroff /proc/cmdline; then poweroff; fi;;
 esac
 exit 0'
 
@@ -95,14 +95,14 @@ mmdebstrap --mode=unshare --variant=minbase --format=null \
   "${keyopts[@]}" \
   --include="$INCLUDE" \
   "${keyhooks[@]}" \
-  --customize-hook="mkdir -p \"\$1/etc/aqours-boottest.d\" && cp \"$STAGE\"/checks/* \"\$1/etc/aqours-boottest.d/\" 2>/dev/null; true" \
-  --customize-hook="printf '%s\n' '$BOOTTEST' > \"\$1/etc/init.d/aqours-boottest\" && chmod 755 \"\$1/etc/init.d/aqours-boottest\"" \
-  --customize-hook='chroot "$1" update-rc.d aqours-boottest defaults >/dev/null' \
+  --customize-hook="mkdir -p \"\$1/etc/yohane-boottest.d\" && cp \"$STAGE\"/checks/* \"\$1/etc/yohane-boottest.d/\" 2>/dev/null; true" \
+  --customize-hook="printf '%s\n' '$BOOTTEST' > \"\$1/etc/init.d/yohane-boottest\" && chmod 755 \"\$1/etc/init.d/yohane-boottest\"" \
+  --customize-hook='chroot "$1" update-rc.d yohane-boottest defaults >/dev/null' \
   --customize-hook='echo "T0:23:respawn:/sbin/getty -L ttyS0 115200 vt100" >> "$1/etc/inittab"' \
-  --customize-hook='echo "/dev/vda / ext4 errors=remount-ro 0 1" > "$1/etc/fstab"; echo aqours-test > "$1/etc/hostname"' \
+  --customize-hook='echo "/dev/vda / ext4 errors=remount-ro 0 1" > "$1/etc/fstab"; echo yohane-test > "$1/etc/hostname"' \
   --customize-hook='rm -f "$1"/var/cache/apt/*.bin; rm -rf "$1"/var/lib/apt/lists/*' \
   --customize-hook="cp -L \"\$1\"/vmlinuz \"$STAGE/vmlinuz\" && cp -L \"\$1\"/initrd.img \"$STAGE/initrd.img\"" \
-  --customize-hook="{ mkdir \"$STAGE/tree\" && tar -C \"\$1\" --one-file-system --exclude=./dev/* -cf - . | tar -C \"$STAGE/tree\" -xpf - && sz=\$(du -sm \"$STAGE/tree\" | cut -f1) && mke2fs -q -t ext4 -L aqours-root -d \"$STAGE/tree\" \"$STAGE/root.ext4\" \$(( sz * 13 / 10 + 256 ))M; } 2>\"$STAGE/hook.log\"; rc=\$?; rm -rf \"$STAGE/tree\"; exit \$rc" \
+  --customize-hook="{ mkdir \"$STAGE/tree\" && tar -C \"\$1\" --one-file-system --exclude=./dev/* -cf - . | tar -C \"$STAGE/tree\" -xpf - && sz=\$(du -sm \"$STAGE/tree\" | cut -f1) && mke2fs -q -t ext4 -L yohane-root -d \"$STAGE/tree\" \"$STAGE/root.ext4\" \$(( sz * 13 / 10 + 256 ))M; } 2>\"$STAGE/hook.log\"; rc=\$?; rm -rf \"$STAGE/tree\"; exit \$rc" \
   "$SUITE" /dev/null - <<<"$SOURCES" || { echo "mkimage: mmdebstrap failed; image hook said:" >&2; cat "$STAGE/hook.log" >&2 2>/dev/null; exit 1; }
 
 for f in root.ext4 vmlinuz initrd.img; do mv -f "$STAGE/$f" "$OUTDIR/$f"; done

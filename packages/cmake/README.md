@@ -5,7 +5,7 @@ Status: active
 
 # cmake
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds cmake without cmake-qt-gui (pulls Qt 6).
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds cmake without cmake-qt-gui (pulls Qt 6).
 This keeps large build-dependency chains out of the minimal bootstrap set (they were found with
 `tools/builddeps`' chain report, `T2.why`).
 

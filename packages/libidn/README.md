@@ -5,7 +5,7 @@ Status: planned (patch written when the package is first built)
 
 # libidn
 
-**Bootstrap only (decision 16).** During the bootstrap, Aqours builds libidn without gnulib/documentation tooling (pulls git, Go, graphviz).
+**Bootstrap only (decision 16).** During the bootstrap, Yohane builds libidn without gnulib/documentation tooling (pulls git, Go, graphviz).
 This keeps large build-dependency chains out of the minimal bootstrap set (they were found with
 `tools/builddeps`' chain report, `T2.why`).
 
