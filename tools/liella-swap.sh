@@ -6,7 +6,7 @@
 #  1. yohane-glibc-headers: a throwaway package of excalibur libc6-dev's headers
 #     minus what linux-libc-dev ships (Liella has no headers yet; decision 10:
 #     never shipped). It is built here from the verified excalibur packages.
-#  2. Liella's libc6, libc-bin and libc6-dev at LIELLA_VERSION, from the Yohane
+#  2. Liella's libc6, libc-bin, libc-dev-bin and libc6-dev at LIELLA_VERSION, from the Yohane
 #     "liella" suite, installed over glibc's (a downgrade, so --force-depends).
 #  3. apt is pinned to keep exactly these versions.
 #  4. Installed packages that declare libc6 (>= 2.40) or (>= 2.41) keep that
@@ -54,11 +54,11 @@ dpkg-deb -Zxz -b hd/pkg yohane-glibc-headers.deb >/dev/null
 log "headers: yohane-glibc-headers ${gv}+yohane.stage1, $(wc -l < hd/keep.list) files"
 
 # 2. swap: Liella's three packages, each named exactly, then verified
-(cd swap && apt-get download -qq "libc6=$LV" "libc-bin=$LV" "libc6-dev=$LV")
+(cd swap && apt-get download -qq "libc6=$LV" "libc-bin=$LV" "libc-dev-bin=$LV" "libc6-dev=$LV")
 dpkg -i --force-depends --force-overwrite yohane-glibc-headers.deb \
-  "swap/libc6_${LV}_amd64.deb" "swap/libc-bin_${LV}_amd64.deb" "swap/libc6-dev_${LV}_amd64.deb" >/dev/null 2>dpkg.err \
+  "swap/libc6_${LV}_amd64.deb" "swap/libc-bin_${LV}_amd64.deb" "swap/libc-dev-bin_${LV}_amd64.deb" "swap/libc6-dev_${LV}_amd64.deb" >/dev/null 2>dpkg.err \
   || { cat dpkg.err; exit 1; }
-for pv in "libc6 $LV" "libc-bin $LV" "libc6-dev $LV" "yohane-glibc-headers ${gv}+yohane.stage1"; do
+for pv in "libc6 $LV" "libc-bin $LV" "libc-dev-bin $LV" "libc6-dev $LV" "yohane-glibc-headers ${gv}+yohane.stage1"; do
   set -- $pv
   got=$(dpkg-query -W -f='${Version}' "$1" 2>/dev/null || echo none)
   [ "$got" = "$2" ] || { log "SWAP FAILED: $1 is $got, expected $2"; cat dpkg.err; exit 1; }
@@ -67,7 +67,7 @@ done
 
 # 3. pin
 cat > /etc/apt/preferences.d/yohane-liella-swap <<P
-Package: libc6 libc-bin libc6-dev
+Package: libc6 libc-bin libc-dev-bin libc6-dev
 Pin: version $LV
 Pin-Priority: 1001
 
@@ -103,7 +103,9 @@ if [ -n "$need_relax" ]; then
     /^(Depends|Pre-Depends): / && index(pk, " " cur " ") { gsub(/libc6 \(>= 2\.4[01][^)]*\)/, "libc6 (>= " lv ")") }
     { print }' /var/lib/dpkg/status.yohane-pre-relax > /var/lib/dpkg/status
 fi
-apt-get check >/dev/null 2>apt.err && log "apt-get check: OK" || { log "apt-get check: FAILED: $(tail -3 apt.err | tr '\n' ' ')"; }
+# apt runs on Liella now (#4), so a broken dependency state is fatal: every build would fail at install time.
+apt-get check >apt.err 2>&1 && log "apt-get check: OK" || {
+  log "apt-get check: FAILED"; cat apt.err >> /var/log/yohane-liella-swap.log; cat apt.err >&2; exit 1; }
 rm -f /etc/apt/sources.list.d/yohane-liella.list
 apt-get update -qq || true
 cd /; rm -rf "$W"
