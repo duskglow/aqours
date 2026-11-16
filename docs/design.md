@@ -1,4 +1,4 @@
-# Aqours design
+# Aqours Linux design
 
 Status: **approved with the owner's decisions** (2026-11-15; see [Decisions](#decisions)). Aqours coordinator.
 
@@ -262,7 +262,7 @@ One repository to start, **`duskglow/aqours`**:
 - `packages/` also holds Aqours's own packages.
 
 **What makes it Aqours rather than Devuan** (owner decision 2: minimal changes):
-- `base-files`: `os-release` with `ID=aqours`, `ID_LIKE="devuan debian"`, `NAME="Aqours"`,
+- `base-files`: `os-release` with `ID=aqours`, `ID_LIKE="devuan debian"`, `NAME="Aqours Linux"`,
   `VERSION_CODENAME=snowhalation`, plus `/etc/issue` and `/etc/debian_version`.
 - `aqours-keyring`: the archive key.
 - apt sources pointing at the Aqours repository.
@@ -316,4 +316,5 @@ The owner's decisions, 2026-11-15.
 | 16 | Build optional features during the bootstrap? | **No: the bootstrap is a minimal subset** (owner, 2026-11-15: "A bootstrap is, pretty much by definition, a subset of a full featured build. The goal right now is just to get a minimal build working with Liella."). Packages whose optional features pull in large build-dependency chains (a GUI, Bluetooth, extra compiler front ends, TeX output, Java bindings) are built without them during the bootstrap: through a Debian build profile where the package defines one, or a small documented patch (`packages/<source>/`, `drop-build-deps`). The full pass, once the system rebuilds itself, builds them with their features; Snow Halation ships only full-pass packages. glibc is never built (Liella replaces it). |
 | 17 | How is the bootstrap structured? | **Like making a compiler self-hosting** (owner, 2026-11-15: "That framing does match my intent… it may not be entirely reducible."). Stage 1 builds what ships (T0 + T1) with Devuan's binaries as the host toolchain, running on Liella. Stage 2 uses only Aqours-built packages, so T2 (the build-only tools) is built for it. Stage 3 rebuilds and checks the fixpoint. See section 4. |
 | 18 | Which build of Snow Halation ships? | **The stage 3 fixpoint** (owner, 2026-11-15: "After stage 3 is fine. We want to do this right."). Stage 1 and 2 output never ships. |
+| 19 | How is the distribution branded? | **"Aqours Linux", never "Aqours" alone** (owner, 2026-11-15), wherever it is named to people: the README, artwork, `os-release` `NAME`, boot and login banners. Identifiers stay `aqours` (decision 7). With the non-affiliation notice in the README, it makes clear this is a fan project, not the group. |
 
