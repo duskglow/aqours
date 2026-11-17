@@ -1,0 +1,11 @@
+--- a/debian/rules	2026-04-20 20:43:50.000000000 +0000
++++ b/debian/rules	2026-11-17 07:53:48.511424276 +0000
+@@ -13,7 +13,7 @@
+ 
+ ifneq ($(filter nodoc,$(DEB_BUILD_PROFILES)),)
+ execute_after_dh_auto_install:
+-	rmdir debian/sed/usr/share/info
++	rm -rf debian/sed/usr/share/info
+ endif
+ 
+ override_dh_shlibdeps:
