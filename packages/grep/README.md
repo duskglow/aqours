@@ -1,7 +1,7 @@
 Source: grep
 Applies-To: excalibur
-Kind: test-fix (0001)
-Status: 0001 active
+Kind: test-fix (0001, 0002)
+Status: 0001, 0002 active
 
 # grep
 
@@ -18,3 +18,15 @@ diagnostic and no output. Checked: the patched test passes with glibc (it still 
 
 **Restored** never needed. It could go upstream if gnulib/grep want it; not egregious, so not sent (package patch
 policy).
+
+## 0002: triple-backref passes on a correct regex, skips on glibc's bug
+
+**Problem.** `tests/triple-backref` checks `grep -E '(.?)(.?)(.?)\3\2\1'`, which glibc's regex gets wrong (sourceware
+bug 11053), so upstream lists it in `XFAIL_TESTS`. libniji's regex gets it right, so on libniji the test passes
+unexpectedly, and automake counts an unexpected pass as a failure (stage 1, 2026-11-17, after 0001).
+
+**Change.** `0002-triple-backref-skip-on-glibc-bug.patch` drops the test from `XFAIL_TESTS` (in `tests/Makefile.am`
+and the shipped `tests/Makefile.in`) and makes the test skip, naming the bug, when the C library's regex gives the
+wrong answer. Checked: PASS on libniji, SKIP on glibc; the rest of the suite is unchanged.
+
+**Restored** never needed.

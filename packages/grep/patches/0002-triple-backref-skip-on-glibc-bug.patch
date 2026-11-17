@@ -1,0 +1,40 @@
+Description: triple-backref passes on a correct regex, skips on glibc bug 11053 (Yohane)
+Forwarded: not-needed
+
+diff -ru a/tests/Makefile.am b/tests/Makefile.am
+--- a/tests/Makefile.am	2023-04-30 07:01:41.000000000 +0000
++++ b/tests/Makefile.am	2026-11-17 08:25:23.641557761 +0000
+@@ -47,7 +47,7 @@
+ # matcher (i.e., with glibc) and with the included matcher.
+ # Both matchers need to be fixed.
+ # FIXME-2025: Remove this once the glibc and gnulib bugs are fixed.
+-XFAIL_TESTS = triple-backref
++XFAIL_TESTS =
+ 
+ # The glibc-infloop test is expected to fail with both the system
+ # matcher (i.e., with glibc) and with the included matcher.
+diff -ru a/tests/Makefile.in b/tests/Makefile.in
+--- a/tests/Makefile.in	2023-05-13 07:34:24.000000000 +0000
++++ b/tests/Makefile.in	2026-11-17 08:25:23.645557697 +0000
+@@ -1948,7 +1948,7 @@
+ # matcher (i.e., with glibc) and with the included matcher.
+ # Both matchers need to be fixed.
+ # FIXME-2025: Remove this once the glibc and gnulib bugs are fixed.
+-XFAIL_TESTS = triple-backref glibc-infloop $(am__append_1)
++XFAIL_TESTS = glibc-infloop $(am__append_1)
+ # The backref-alt test fails for glibc 2.27 and earlier.
+ # If you're using older glibc you can upgrade to glibc 2.28 or later,
+ # configure --with-included-regex, or ignore the test failure.
+diff -ru a/tests/triple-backref b/tests/triple-backref
+--- a/tests/triple-backref	2023-01-02 04:36:23.000000000 +0000
++++ b/tests/triple-backref	2026-11-17 08:25:23.647557665 +0000
+@@ -28,4 +28,9 @@
+ timeout 10 grep -E '(.?)(.?)(.?)\3\2\1' in > out || fail=1
+ compare out in || fail=1
+ 
++# Yohane: with a C library whose regex gets this right (libniji) the test passes;
++# with glibc's known bug (sourceware 11053) it is skipped instead of being an
++# expected failure, so neither counts as a failure.
++test $fail = 0 || skip_ "C library regex has sourceware bug 11053 (triple back-reference)"
++
+ Exit $fail
