@@ -1,13 +1,14 @@
 #!/bin/sh
 # liella-swap.sh: run INSIDE a build chroot (as root) to swap Liella's system
 # flavour in for glibc (design decision 12, stage 1). Used by tools/mkchroot
-# --liella-swap. Arguments: LIELLA_VERSION YOHANE_REPO_URL
+# --liella-swap. Arguments: LIELLA_VERSION YOHANE_REPO_URL [SUITE] (SUITE defaults to "niji";
+# Liella was renamed libniji in snapshot-2026-11-17, the archive suite with it)
 #
 #  1. yohane-glibc-headers: a throwaway package of excalibur libc6-dev's headers
 #     minus what linux-libc-dev ships (Liella has no headers yet; decision 10:
 #     never shipped). It is built here from the verified excalibur packages.
 #  2. Liella's libc6, libc-bin, libc-dev-bin and libc6-dev at LIELLA_VERSION, from the Yohane
-#     "liella" suite, installed over glibc's (a downgrade, so --force-depends).
+#     SUITE suite ("niji"; "liella" before snapshot-2026-11-17), installed over glibc's (a downgrade, so --force-depends).
 #  3. apt is pinned to keep exactly these versions.
 #  4. Installed packages that declare libc6 (>= 2.40) or (>= 2.41) keep that
 #     dependency, unless every GLIBC_2.40/GLIBC_2.41 symbol their ELF files
@@ -18,13 +19,14 @@
 set -eu
 LV=${1:?usage: liella-swap.sh LIELLA_VERSION YOHANE_REPO_URL}
 REPO=${2:?}
+SUITE=${3:-niji}
 LOG=/var/log/yohane-liella-swap.log
 export DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8
 log() { echo "$*" | tee -a "$LOG"; }
 : > "$LOG"
 W=$(mktemp -d); cd "$W"
 
-echo "deb $REPO liella main" > /etc/apt/sources.list.d/yohane-liella.list
+echo "deb $REPO $SUITE main" > /etc/apt/sources.list.d/yohane-liella.list
 apt-get update -qq
 
 # 1. headers package (glibc's libc6-dev is downloaded into its own directory,
