@@ -1,0 +1,10 @@
+--- a/debian/control	2025-03-10 17:33:34.000000000 +0000
++++ b/debian/control	2026-11-17 06:28:42.897329527 +0000
+@@ -20,7 +20,6 @@
+  libx11-dev,
+  meson,
+  pkgconf,
+- valgrind-if-available,
+  xml-core,
+  xmlto <!nodoc>,
+ Build-Depends-Indep:
