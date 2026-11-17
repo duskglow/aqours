@@ -125,7 +125,8 @@ def record(c, con, stage, h, src, ver, text, stop):
     print(f"{time.strftime('%H:%M:%S')} {h:6} {res:5} {secs:6}s {src} {ver}" + (f"  [{sig}]" if sig else ""),
           flush=True)
     if sig and not acknowledged(sig):
-        n = con.execute("select count(distinct source) from jobs where stage=? and signature=?",
+        # Blocked jobs are triaged (a note says why), so they no longer count towards a systemic stop.
+        n = con.execute("select count(distinct source) from jobs where stage=? and signature=? and status != 'blocked'",
                         (stage, sig)).fetchone()[0]
         if n >= SYSTEMIC and not stop.is_set():
             stop.set()
