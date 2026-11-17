@@ -1,0 +1,25 @@
+Description: stack-overflow test: also accept a regex that rejects the pattern without recursing
+ The test feeds grep up to 10 million "(" and expects either gnulib's c-stack
+ "stack overflow" diagnostic or (for a regex that avoids deep recursion) exit
+ status 1 with no output. A C library whose regcomp parses iteratively reports
+ the pattern as what it is, "Unmatched ( or \(", with exit status 2, exactly as
+ grep does for a handful of "(". Accept that too.
+Author: Yohane Linux Maintainers <aqours@koiren.ai>
+Forwarded: not-needed
+
+--- a/tests/stack-overflow
++++ b/tests/stack-overflow
+@@ -50,4 +50,13 @@
+   && ! test -s err \
+   && Exit 0
+
++# Yohane: a regex that parses the pattern without deep recursion (libniji's)
++# rejects it the same way it rejects a few unmatched parentheses: exit status 2,
++# no output, and the usual diagnostic. That is a working regex too.
++test $st = 2 \
++  && ! test -s out \
++  && grep -q 'Unmatched ( or \\(' err \
++  && test "$(wc -l < err)" = 1 \
++  && Exit 0
++
+ fail_ 'grep never printed "stack overflow"'

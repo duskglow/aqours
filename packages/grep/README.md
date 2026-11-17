@@ -1,0 +1,20 @@
+Source: grep
+Applies-To: excalibur
+Kind: test-fix (0001)
+Status: 0001 active
+
+# grep
+
+## 0001: stack-overflow test accepts a non-recursive regex
+
+**Problem.** `tests/stack-overflow` feeds grep up to 10 million `(` and passes only if gnulib's c-stack prints
+"grep: stack overflow" (glibc's `regcomp` recurses once per parenthesis and overflows), or if grep exits 1 with no
+output. libniji's `regcomp` parses the pattern without deep recursion and rejects it as what it is: exit status 2,
+"grep: Unmatched ( or \(", the same answer grep gives for a few unmatched parentheses on any C library. So the test
+failed on libniji (stage 1, 2026-11-17) although grep behaves correctly.
+
+**Change.** `0001-stack-overflow-nonrecursive-regex.patch` also accepts exit status 2 with exactly that one-line
+diagnostic and no output. Checked: the patched test passes with glibc (it still sees the overflow) and with libniji.
+
+**Restored** never needed. It could go upstream if gnulib/grep want it; not egregious, so not sent (package patch
+policy).
