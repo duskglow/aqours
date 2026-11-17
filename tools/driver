@@ -44,6 +44,10 @@ BIG = re.compile(r"^(gcc-1\d|glibc|llvm-toolchain-.*|rustc|rust-.*|linux|binutil
                  r"openssl|util-linux|gnutls28|krb5|bind9|vim|grub2|elfutils|gnupg2|apparmor|exim4|openssh)$")
 SYSTEMIC = 3
 
+# Builds finish on several worker threads; reprepro takes an exclusive lock on its
+# database and fails at once if another instance holds it, so publishes run one at a time.
+_publish_lock = threading.Lock()
+
 
 def conf():
     with open(CONF) as f:
@@ -118,7 +122,8 @@ def record(c, con, stage, h, src, ver, text, stop):
         res, secs, fstage, log = "error", 0, "-", "-"
     sig = None if res == "ok" else signature(fstage, log, c["hosts"][h]["ssh"])
     if res in ("ok", "oknc") and stage in c.get("publish", {}):
-        res = publish(c, stage, src, ver) or res
+        with _publish_lock:
+            res = publish(c, stage, src, ver) or res
     con.execute("update jobs set status=?, host=?, finished=?, secs=?, failstage=?, signature=?, log=? "
                 "where stage=? and source=? and version=?",
                 (res, h, time.time(), secs, fstage, sig, log, stage, src, ver))
